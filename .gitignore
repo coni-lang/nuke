@@ -1,0 +1,17 @@
+nuke
+.DS_Store
+dist
+classes
+target
+.idea
+build
+out
+uber-classes
+.github
+example-java-lib/libs
+example-spring-boot/libs
+.gradle
+.cache
+test-classes
+std-classes
+libmlx_c.dylib

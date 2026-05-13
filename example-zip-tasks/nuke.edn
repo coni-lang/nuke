@@ -1,0 +1,16 @@
+{:name "zip-tasks-example"
+ :version "1.0.0"
+ 
+ :tasks 
+ {:zip-scripts {:extends "zip"
+                :zip-includes ["scripts"]
+                :desc "Zips only the scripts directory"}
+                
+  :zip-src {:extends "zip"
+            :zip-includes ["src" "README.md"]
+            :desc "Zips the source code and README"}
+            
+  :zip-custom-dest {:extends "zip"
+                    :zip-includes ["scripts" "src"]
+                    :zip-name "out/custom-archive-name.zip"
+                    :desc "Zips both, and outputs to a custom file name and directory"}}}

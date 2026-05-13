@@ -1,0 +1,10 @@
+{:name "custom-tasks-example"
+ :version "1.0.0"
+
+ :tasks 
+ {:file-hello {:coni "scripts/say_hello.coni"
+               :desc "Executes a separate Coni script file"}
+               
+  :mixed-hello {:deps [:file-hello]
+                :cmds ["echo Both Coni tasks completed!"]
+                :desc "Demonstrates dependencies between tasks"}}}

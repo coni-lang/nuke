@@ -1,0 +1,37 @@
+<idea-plugin>
+    <id>com.hellonico.nuke.plugin</id>
+    <name>Nuke Build</name>
+    <vendor email="nico@hellonico.info" url="https://hellonico.info">Hellonico</vendor>
+
+    <description><![CDATA[
+    Plugin for the Nuke build tool. Provides tool window, classpath sync, and task execution.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Nuke" anchor="right" icon="AllIcons.Toolwindows.ToolWindowBuild" factoryClass="com.hellonico.nuke.plugin.NukeToolWindowFactory"/>
+        <applicationService serviceImplementation="com.hellonico.nuke.plugin.NukeSettings"/>
+        <applicationConfigurable parentId="tools" instance="com.hellonico.nuke.plugin.NukeSettingsConfigurable" id="com.hellonico.nuke.plugin.NukeSettingsConfigurable" displayName="Nuke Build"/>
+        
+        <configurationType implementation="com.hellonico.nuke.plugin.NukeRunConfigurationType"/>
+        <consoleFilterProvider implementation="com.hellonico.nuke.plugin.NukeConsoleFilterProvider"/>
+        <moduleBuilder builderClass="com.hellonico.nuke.plugin.NukeModuleBuilder"/>
+        
+        <fileType name="Nuke File" implementationClass="com.hellonico.nuke.plugin.lang.NukeFileType" fieldName="INSTANCE" language="Nuke" extensions="edn;coni"/>
+        <lang.parserDefinition language="Nuke" implementationClass="com.hellonico.nuke.plugin.lang.NukeParserDefinition"/>
+        <lang.syntaxHighlighterFactory language="Nuke" implementationClass="com.hellonico.nuke.plugin.lang.NukeSyntaxHighlighterFactory"/>
+        <runLineMarkerContributor language="Nuke" implementationClass="com.hellonico.nuke.plugin.NukeRunLineMarkerContributor"/>
+    </extensions>
+    
+    <applicationListeners>
+        <listener class="com.hellonico.nuke.plugin.NukeFileListener" topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
+    </applicationListeners>
+
+    <actions>
+        <action id="Nuke.Sync" class="com.hellonico.nuke.plugin.NukeSyncAction" text="Sync Nuke Project" description="Sync Nuke dependencies and tasks" icon="AllIcons.Actions.Refresh">
+            <add-to-group group-id="ToolbarRunGroup" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

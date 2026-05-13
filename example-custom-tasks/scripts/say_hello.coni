@@ -1,0 +1,2 @@
+(println "Hello from a separate Coni script file!")
+(println "The configuration version is:" (:version @global-task-config))

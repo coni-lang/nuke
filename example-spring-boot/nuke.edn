@@ -1,0 +1,19 @@
+{:name "example-spring-boot"
+ :version "0.0.1"
+ :main-class "uk.gov.hmcts.reform.demo.Application"
+ :src-dirs ["src/main/java"]
+ :test-dirs ["src/test/java" "src/integrationTest/java" "src/smokeTest/java" "src/functionalTest/java"]
+ :tasks {:clean {:path "build"}}
+ :dependencies ["org.springframework.boot:spring-boot-starter-web:LATEST"
+                "org.springframework.boot:spring-boot-starter-actuator:LATEST"
+                "org.springframework.boot:spring-boot-starter-aop:LATEST"
+                "org.springframework.boot:spring-boot-starter-json:LATEST"
+                "org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14"
+                "com.github.hmcts.java-logging:logging:6.1.9"
+                "org.apache.logging.log4j:log4j-api:log4JVersion"
+                "org.apache.logging.log4j:log4j-to-slf4j:log4JVersion"
+                "ch.qos.logback:logback-classic:logbackVersion"
+                "ch.qos.logback:logback-core:logbackVersion"]
+ :test-dependencies ["org.springframework.boot:spring-boot-starter-test:LATEST"
+                     "io.rest-assured:rest-assured:5.5.6"]
+}

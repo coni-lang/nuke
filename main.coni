@@ -1,0 +1,490 @@
+(require "libs/os/src/io.coni" :as io)
+(require "libs/os/src/shell.coni" :as shell)
+(require "libs/str/src/str.coni" :as str)
+(require "libs/edn/src/edn.coni" :as edn)
+
+
+
+(defprotocol Task
+  (get-name [this])
+  (get-deps [this])
+  (execute [this config]))
+
+(def global-tasks (atom {}))
+
+(defn register-task [t]
+  (reset! global-tasks (assoc @global-tasks (get-name t) t)))
+
+(defn to-vec [coll]
+  (loop [rem coll acc []]
+    (if (empty? rem) acc
+      (recur (rest rem) (conj acc (first rem))))))
+
+(defn find-java-files [dir]
+  (let [res (shell/sh (str "find " dir " -name \"*.java\""))]
+    (if (= 0 (:code res))
+      (let [files (str/split (str/trim (:stdout res)) "\n")]
+        (to-vec (filter (fn [x] (not (empty? x))) files)))
+      [])))
+
+;; Task Implementations
+(defn exec-clean [config]
+  (println "Cleaning build directories...")
+  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "target" "libs"])
+        targets-str (str/join " " clean-targets)]
+    (shell/sh (str "rm -rf " targets-str))))
+
+(defn exec-download-deps [config]
+  (let [repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
+        deps (:dependencies config)]
+    (if deps
+      (do
+        (shell/sh "mkdir -p libs")
+        (loop [rem deps]
+          (if (not (empty? rem))
+            (let [dep-str (first rem)
+                  parts (str/split dep-str ":")
+                  group-id (get parts 0)
+                  artifact-id (get parts 1)
+                  version (get parts 2)
+                  g-path (str/replace group-id "." "/")
+                  repo-url (first repos)
+                  url (str repo-url "/" g-path "/" artifact-id "/" version "/" artifact-id "-" version ".jar")
+                  filename (str artifact-id "-" version ".jar")
+                  filepath (str "libs/" filename)]
+              (if (not (io/exists? filepath))
+                (do
+                  (println (str "Downloading " filename " from " url "..."))
+                  (shell/sh (str "curl -L -s -o " filepath " " url))))
+              (recur (rest rem))))))))
+  (let [local-deps (:local-dependencies config)]
+    (if local-deps
+      (do
+        (shell/sh "mkdir -p libs")
+        (loop [rem local-deps]
+          (if (not (empty? rem))
+            (let [ldep (first rem)
+                  lpath (if (string? ldep) ldep (:path ldep))]
+              (if lpath
+                (do
+                  (println (str "Resolving local dependency at " lpath "..."))
+                  (let [res (shell/sh (str "cd " lpath " && \"$NUKE_BIN\" jar"))]
+                    (if (not (= 0 (:code res)))
+                      (do
+                        (println (str "Failed to build local dependency at " lpath))
+                        (println (:stderr res))
+                        (sys-exit 1))
+                      (do
+                        (println (str "Copying local dependency jar from " lpath "..."))
+                        (shell/sh (str "cp " lpath "/target/*.jar libs/ 2>/dev/null || true")))))))
+              (recur (rest rem)))))))))
+
+(defn get-java-bin [config bin-name]
+  (let [conf-home (:java-home config)]
+    (if conf-home
+      (str conf-home "/bin/" bin-name)
+      (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"" bin-name))))
+
+(defn exec-compile [config]
+  (println "Compiling Java files...")
+  (shell/sh "mkdir -p classes")
+  (let [src-dir (or (:src-dir config) "src/main")
+        java-files (find-java-files src-dir)]
+    (if (> (count java-files) 0)
+      (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
+                      (if (= 0 (:code res))
+                        (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
+                        ""))
+            cp-arg (if (empty? cp-jars) "" (str "-cp \"" cp-jars "\""))
+            encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
+            opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
+            files-arg (str/join " " java-files)
+            cmd (str (get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " opts-arg " " files-arg)]
+        (println "Running javac: " cmd)
+        (let [res (shell/sh cmd)]
+          (if (not (= 0 (:code res)))
+            (do
+              (println "Compilation failed!")
+              (println (:stderr res))
+              (sys-exit 1)))))
+      (println "No java files found. Skipping compilation."))))
+
+(defn exec-jar-prep [config]
+  (println "Preparing standard jar...")
+  (shell/sh "mkdir -p target std-classes")
+  (println "Copying compiled classes...")
+  (shell/sh "cp -R classes/* std-classes/ 2>/dev/null || true")
+  (println "Copying resources...")
+  (let [res-dir (or (:resource-dir config) "src/main/resources")]
+    (shell/sh (str "if [ -d " res-dir " ]; then cp -R " res-dir "/* std-classes/ 2>/dev/null || true; fi")))
+  (println "Writing Manifest...")
+  (let [main-class (:main-class config)]
+    (if main-class
+      (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))
+      (io/write-file "Manifest.txt" ""))))
+
+(defn exec-jar [config]
+  (exec-jar-prep config)
+  (let [app-version (or (:version config) "1.0.0")
+        app-name (or (:name config) "app")
+        tname (:task-name config)
+        suffix (if (and tname (not (= tname "jar"))) (str "-" tname) "")
+        default-jar (str "target/" app-name "-" app-version suffix ".jar")
+        jar-name (or (:jar-name config) default-jar)]
+    (shell/sh (str "mkdir -p \"$(dirname '" jar-name "')\""))
+    (let [cmd (str (get-java-bin config "jar") " cfm '" jar-name "' Manifest.txt -C std-classes .")]
+      (println "Running: " cmd)
+      (let [res (shell/sh cmd)]
+        (if (not (= 0 (:code res)))
+          (do
+            (println "Jar creation failed!")
+            (println (:stderr res))
+            (sys-exit 1))
+          (println (str "Successfully created " jar-name)))))))
+
+(defn exec-uberjar-prep [config]
+  (println "Creating uberjar...")
+  (shell/sh "mkdir -p target uber-classes")
+  (println "Unzipping dependency jars...")
+  (shell/sh "for jar in libs/*.jar; do unzip -q -o \"$jar\" -d uber-classes/ 2>/dev/null || true; done")
+  (println "Copying compiled classes...")
+  (shell/sh "cp -R classes/* uber-classes/ 2>/dev/null || true")
+  (println "Copying resources...")
+  (let [res-dir (or (:resource-dir config) "src/main/resources")]
+    (shell/sh (str "if [ -d " res-dir " ]; then cp -R " res-dir "/* uber-classes/ 2>/dev/null || true; fi")))
+  (println "Writing Manifest...")
+  (let [main-class (:main-class config)]
+    (if main-class
+      (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))
+      (io/write-file "Manifest.txt" ""))))
+
+(defn exec-uberjar [config]
+  (exec-uberjar-prep config)
+  (let [app-version (or (:version config) "1.0.0")
+        app-name (or (:name config) "app")
+        tname (:task-name config)
+        suffix (if (and tname (not (= tname "uberjar"))) (str "-" tname) "")
+        default-jar (str "target/" app-name "-" app-version suffix "-uberjar.jar")
+        jar-name (or (:jar-name config) default-jar)]
+    (shell/sh (str "mkdir -p \"$(dirname '" jar-name "')\""))
+    (let [cmd (str (get-java-bin config "jar") " cfm '" jar-name "' Manifest.txt -C uber-classes .")]
+      (println "Running: " cmd)
+      (let [res (shell/sh cmd)]
+        (if (not (= 0 (:code res)))
+          (do
+            (println "Jar creation failed!")
+            (println (:stderr res))
+            (sys-exit 1))
+          (println (str "Successfully created " jar-name)))))))
+
+(defn generate-pom [config]
+  (let [name (or (:name config) "app")
+        version (or (:version config) "1.0.0")
+        group-id (or (:group-id config) "com.example")
+        deps (:dependencies config)
+        deps-xml (if deps
+                   (loop [rem deps acc ""]
+                     (if (empty? rem) acc
+                       (let [dep-str (first rem)
+                             parts (str/split dep-str ":")
+                             g (get parts 0)
+                             a (get parts 1)
+                             v (get parts 2)
+                             dep-xml (str "    <dependency>\n      <groupId>" g "</groupId>\n      <artifactId>" a "</artifactId>\n      <version>" v "</version>\n    </dependency>\n")]
+                         (recur (rest rem) (str acc dep-xml)))))
+                   "")]
+    (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+         "<project xmlns=\"http://maven.apache.org/POM/4.0.0\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd\">\n"
+         "  <modelVersion>4.0.0</modelVersion>\n"
+         "  <groupId>" group-id "</groupId>\n"
+         "  <artifactId>" name "</artifactId>\n"
+         "  <version>" version "</version>\n"
+         "  <dependencies>\n"
+         deps-xml
+         "  </dependencies>\n"
+         "</project>\n")))
+
+(defn exec-test [config]
+  (println "Running tests...")
+  (let [test-dir (or (:test-dir config) "src/tests")]
+    (if (io/exists? test-dir)
+      (let [java-files (find-java-files test-dir)]
+        (if (> (count java-files) 0)
+          (do
+            (shell/sh "mkdir -p test-classes")
+            (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
+                            (if (= 0 (:code res))
+                              (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
+                              ""))
+                  cp-arg (str "-cp \"classes:test-classes" (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
+                  files-arg (str/join " " java-files)
+                  cmd (str (get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
+              (println "Compiling tests...")
+              (let [res (shell/sh cmd)]
+                (if (not (= 0 (:code res)))
+                  (do
+                    (println "Test compilation failed!")
+                    (println (:stderr res))
+                    (sys-exit 1))
+                  (let [test-classes (let [res2 (shell/sh (str "find " test-dir " -name \"*Test.java\" | sed 's|^" test-dir "/||; s|\\.java$||; s|/|.|g'"))]
+                                       (if (= 0 (:code res2)) (str/trim (:stdout res2)) ""))]
+                    (if (not (empty? test-classes))
+                      (let [test-cmd (str (get-java-bin config "java") " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " "))]
+                        (let [test-res (shell/sh test-cmd)]
+                          (shell/sh "mkdir -p target")
+                          (io/write-file "target/test-report.txt" (:stdout test-res))
+                          (println (:stdout test-res))
+                          (if (not (= 0 (:code test-res)))
+                            (do
+                              (println "Tests failed! Check target/test-report.txt for details.")
+                              (println (:stderr test-res)))
+                            (println "All tests passed! Report saved to target/test-report.txt."))))
+                      (println "No *Test.java files found to run.")))))))
+          (println "No test java files found.")))
+      (println "No test directory found."))))
+
+(defn exec-run [config]
+  (let [main-class (:main-class config)]
+    (if (not main-class)
+      (do
+        (println "Error: No :main-class defined in configuration.")
+        (sys-exit 1))
+      (do
+        (println (str "Running " main-class "..."))
+        (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
+                        (if (= 0 (:code res))
+                          (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
+                          ""))
+              res-dir (or (:resource-dir config) "src/main/resources")
+              cp-arg (str "-cp \"classes" (if (io/exists? res-dir) (str ":" res-dir) "") (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
+              cmd (str (get-java-bin config "java") " " cp-arg " " main-class)]
+          (let [res (shell/sh cmd)]
+            (if (not (= 0 (:code res)))
+              (do
+                (println "Run failed!")
+                (println (:stderr res))
+                (sys-exit 1))
+              (if (not (empty? (str/trim (:stdout res))))
+                (println (str/trim (:stdout res)))))))))))
+
+(defn exec-upload [config]
+  (println "Uploading to Nexus...")
+  (let [pom-content (generate-pom config)]
+    (io/write-file "target/pom.xml" pom-content)
+    (let [app-version (if (:version config) (:version config) "1.0.0")]
+      (let [app-name (if (:name config) (:name config) "app")]
+        (let [group-id (if (:group-id config) (:group-id config) "com.example")]
+          (let [tname (:task-name config)
+                suffix (if (and tname (not (= tname "upload"))) (str "-" tname) "")
+                default-jar (str "target/" app-name "-" app-version suffix "-uberjar.jar")
+                jar-name (or (:jar-name config) default-jar)]
+            (let [deploy-url (if (:deploy config) (:deploy config) "https://repository.hellonico.info/")]
+              (let [base-url (if (str/ends-with? deploy-url "/") (str/substring deploy-url 0 (- (count deploy-url) 1)) deploy-url)]
+                (let [deploy-repo (or (:deploy-repo config) "maven-releases")]
+                  (let [url (if (str/includes? base-url "/service/rest") 
+                                deploy-url 
+                                (str base-url "/service/rest/v1/components?repository=" deploy-repo))]
+                  (let [cmd (str "curl -sS -f -u admin:lpwesab8 -X POST \"" url "\""
+                             " -F maven2.groupId=" group-id
+                             " -F maven2.artifactId=" app-name
+                             " -F maven2.version=" app-version
+                             " -F maven2.asset1=@" jar-name
+                             " -F maven2.asset1.extension=jar"
+                             " -F maven2.asset2=@target/pom.xml"
+                             " -F maven2.asset2.extension=pom")]
+                (let [res (shell/sh cmd)]
+                  (if (not (= 0 (:code res)))
+                    (do
+                      (println "Upload failed!")
+                      (println (:stderr res))
+                      (sys-exit 1))
+                    (println "Successfully uploaded to Nexus!"))))))))))))))
+
+(defn exec-zip [config]
+  (let [app-version (or (:version config) "1.0.0")
+        app-name (or (:name config) "app")
+        tname (:task-name config)
+        suffix (if (and tname (not (= tname "zip"))) (str "-" tname) "")
+        default-zip (str "target/" app-name "-" app-version suffix ".zip")
+        zip-name (or (:zip-name config) default-zip)
+        zip-base-name (or (:zip-name config) (str app-name "-" app-version suffix ".zip"))]
+    (println (str "Creating zip archive " zip-name "..."))
+    (shell/sh (str "mkdir -p \"$(dirname '" zip-name "')\""))
+    (if (:zip-includes config)
+      (let [includes-str (str/join " " (:zip-includes config))
+            cmd (str "zip -q -r '" zip-name "' " includes-str)]
+        (let [res (shell/sh cmd)]
+           (if (not (= (:code res) 0))
+             (do
+               (println "Zip failed!")
+               (println (:stderr res)))
+             (println (str "Successfully created " zip-name)))))
+      (let [cmd (str "cd target && zip -q '" zip-base-name "' *.jar *.txt *.pom 2>/dev/null || true")]
+        (shell/sh cmd)
+        (println (str "Successfully created " zip-name))))))
+
+(defn exec-template [config]
+  (println "Running templates...")
+  (let [tpls (:templates config)]
+    (if tpls
+      (loop [rem tpls]
+        (if (empty? rem) nil
+          (let [tpl (first rem)]
+            (println (str "Processing template " tpl))
+            ;; Future templating logic goes here
+            (recur (rest rem)))))
+      (println "No :templates defined in config."))))
+
+(def global-tasks (atom {}))
+(def global-task-list (atom []))
+
+(defn register-task [name deps desc exec-fn]
+  (reset! global-tasks (assoc @global-tasks name {:name name :deps deps :desc desc :exec-fn exec-fn}))
+  (reset! global-task-list (conj @global-task-list name)))
+
+(register-task "clean" [] "Clean build directories" exec-clean)
+(register-task "template" [] "Process source templates" exec-template)
+(register-task "download-deps" [] "Download project dependencies" exec-download-deps)
+(register-task "compile" ["template" "download-deps"] "Compile Java source files" exec-compile)
+(register-task "test" ["compile"] "Run JUnit tests" exec-test)
+(register-task "run" ["compile"] "Run the Java application" exec-run)
+(register-task "jar" ["compile"] "Create a standard thin jar" exec-jar)
+(register-task "uberjar" ["test"] "Create an executable fat jar" exec-uberjar)
+(register-task "zip" ["uberjar"] "Create a distribution zip" exec-zip)
+(register-task "upload" ["zip"] "Upload the jar and POM to Nexus" exec-upload)
+(register-task "build" ["upload"] "Run the full build pipeline" (fn [config] (println "Build complete.")))
+
+(defn has-key? [m k]
+  (not (= (get m k :not-found) :not-found)))
+
+(defn run-task-graph [task-name config completed]
+  (if (has-key? completed task-name)
+    completed
+    (let [task (get @global-tasks task-name)]
+      (if (nil? task)
+        (do
+          (println (str "Unknown task: " task-name))
+          (sys-exit 1))
+        (let [deps (:deps task)
+              completed-after-deps (loop [rem deps acc completed]
+                                     (if (empty? rem)
+                                       acc
+                                       (recur (rest rem) (run-task-graph (first rem) config acc))))
+              exec-fn (:exec-fn task)]
+          (exec-fn config)
+          (assoc completed-after-deps task-name true))))))
+
+(defn show-tasks []
+  (println "Available Tasks:")
+  (loop [rem @global-task-list]
+    (if (not (empty? rem))
+      (let [tname (first rem)
+            task (get @global-tasks tname)
+            padding (str/repeat " " (- 15 (count tname)))]
+        (println (str "  " tname padding " - " (:desc task)))
+        (recur (rest rem))))))
+
+(defn show-info [config]
+  (println "Project Metadata:")
+  (println (str "  Name: " (or (:name config) "app")))
+  (println (str "  Version: " (or (:version config) "1.0.0")))
+  (println (str "  Main-Class: " (or (:main-class config) "None")))
+  (println "  Dependencies:")
+  (let [deps (:dependencies config)]
+    (if (and deps (> (count deps) 0))
+      (loop [rem deps]
+        (if (not (empty? rem))
+          (do
+            (println (str "    - " (first rem)))
+            (recur (rest rem)))))
+      (println "    None"))))
+
+(def global-task-config (atom {}))
+
+(defn load-custom-tasks [config]
+  (let [tasks (:tasks config)]
+    (if tasks
+      (loop [rem (keys tasks)]
+        (if (empty? rem)
+          nil
+          (let [k (first rem)
+                tname-raw (str k)
+                tname (if (str/starts-with? tname-raw ":") 
+                        (str/substring tname-raw 1 (count tname-raw)) 
+                        tname-raw)
+                tinfo (get tasks k)
+                deps (let [raw-deps (or (:deps tinfo) [])]
+                       (loop [drem raw-deps dacc []]
+                         (if (empty? drem)
+                           dacc
+                           (let [d (first drem)
+                                 draw (str d)
+                                 dname (if (str/starts-with? draw ":")
+                                         (str/substring draw 1 (count draw))
+                                         draw)]
+                             (recur (rest drem) (conj dacc dname))))))
+                desc (or (:desc tinfo) (str "Custom task " tname))
+                cmds (or (:cmds tinfo) [])
+                coni-code (:coni tinfo)
+                extends-task-raw (:extends tinfo)
+                extends-task (if extends-task-raw
+                               (let [etr-str (str extends-task-raw)]
+                                 (if (str/starts-with? etr-str ":")
+                                   (str/substring etr-str 1 (count etr-str))
+                                   etr-str))
+                               nil)
+                exec-fn (fn [cfg]
+                          (reset! global-task-config cfg)
+                          (if extends-task
+                            (let [base-task (get @global-tasks extends-task)]
+                              (if base-task
+                                (let [base-exec-fn (:exec-fn base-task)
+                                      merged-cfg (merge cfg tinfo)
+                                      merged-cfg-w-name (assoc merged-cfg :task-name tname)]
+                                  (base-exec-fn merged-cfg-w-name))
+                                (do
+                                  (println (str "Error: base task '" extends-task "' not found for task '" tname "'"))
+                                  (sys-exit 1)))))
+                          (if coni-code
+                            (let [code (if (and (string? coni-code) (io/exists? coni-code))
+                                         (io/read-file coni-code)
+                                         coni-code)]
+                              (eval-string code)))
+                          (loop [crem cmds]
+                            (if (not (empty? crem))
+                              (let [cmd-str (first crem)
+                                    _ (println (str "Running custom cmd: " cmd-str))
+                                    res (shell/sh cmd-str)]
+                                (if (not (= 0 (:code res)))
+                                  (do
+                                    (println (str "Task " tname " failed!"))
+                                    (println (:stderr res))
+                                    (sys-exit 1))
+                                  (do
+                                    (if (not (empty? (str/trim (:stdout res))))
+                                      (println (str/trim (:stdout res))))
+                                    (recur (rest crem))))))))]
+            (register-task tname deps desc exec-fn)
+            (recur (rest rem))))))))
+
+(defn get-cmd [args]
+  (if (> (count args) 1)
+    (let [a1 (get args 1)]
+      (if (str/includes? a1 ".coni")
+        (if (> (count args) 2) (get args 2) "build")
+        a1))
+    "build"))
+
+(defn run []
+  (let [args (sys-os-args)
+        cmd (get-cmd args)
+        config-file (if (io/exists? "nuke.edn") "nuke.edn" nil)
+        config-content (if config-file (io/read-file config-file) nil)
+        config (if config-content (edn/parse-edn config-content) {})]
+    (load-custom-tasks config)
+    (cond
+      (= cmd "tasks") (show-tasks)
+      (= cmd "info")  (show-info config)
+      :else (run-task-graph cmd config {}))))
+
+(run)

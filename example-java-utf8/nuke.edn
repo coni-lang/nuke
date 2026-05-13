@@ -1,0 +1,5 @@
+{:name "example-java-utf8"
+ :version "1.0.0"
+ :main-class "com.example.Main"
+ :encoding "UTF-8"
+ :javac-opts ["-Xlint:unchecked" "-Xlint:deprecation"]}

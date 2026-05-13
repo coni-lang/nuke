@@ -1,0 +1,5 @@
+{:name "example-java-app"
+ :version "1.0.0"
+ :main-class "com.example.Main"
+ :local-dependencies [{:path "../example-java-lib"}
+                      {:path "../example-java-properties"}]}

@@ -1,0 +1,10 @@
+{:name "example-java-multi-run"
+ :version "1.0.0"
+ :tasks {:run-a {:extends "run"
+                 :deps ["compile"]
+                 :main-class "com.example.a.A"
+                 :desc "Runs Class A"}
+         :run-b {:extends "run"
+                 :deps ["compile"]
+                 :main-class "com.example.b.B"
+                 :desc "Runs Class B"}}}
