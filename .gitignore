@@ -15,3 +15,5 @@ example-spring-boot/libs
 test-classes
 std-classes
 libmlx_c.dylib
+.lsp
+.cl-kondo

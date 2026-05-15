@@ -33,5 +33,9 @@
         <action id="Nuke.Sync" class="com.hellonico.nuke.plugin.NukeSyncAction" text="Sync Nuke Project" description="Sync Nuke dependencies and tasks" icon="AllIcons.Actions.Refresh">
             <add-to-group group-id="ToolbarRunGroup" anchor="last"/>
         </action>
+        <action id="Nuke.ReloadFile" class="com.hellonico.nuke.plugin.NukeReloadFileAction" text="Reload Nuke Project" description="Reload Nuke project from nuke.edn" icon="AllIcons.Actions.Refresh">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>

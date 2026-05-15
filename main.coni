@@ -488,3 +488,4 @@
       :else (run-task-graph cmd config {}))))
 
 (run)
+(sys-exit 0)

@@ -7,8 +7,8 @@
    :shell {:cmd "JAVA_HOME=~/.sdkman/candidates/java/17.0.10-tem ./gradlew buildPlugin"
            :cwd "nuke-intellij-plugin"}}
   {:name "Create Dist Folder"
-   :shell {:cmd "rm -rf dist && mkdir -p dist/nuke/examples && cp nuke main.coni dist/nuke/ && cp -r example-* dist/nuke/examples/ && cp nuke-intellij-plugin/build/distributions/*.zip dist/nuke/"
+   :shell {:cmd "rm -rf dist && mkdir -p dist/nuke/examples && cp nuke main.coni dist/nuke/ && rsync -a --exclude-from=.gitignore --exclude=example-spring-boot example-* dist/nuke/examples/ && cp nuke-intellij-plugin/build/distributions/*.zip dist/nuke/"
            :cwd "."}}
   {:name "Zip Dist"
-   :shell {:cmd "cd dist && zip -r nuke-dist.zip nuke"
+   :shell {:cmd "cd dist && zip -r nuke-dist-$(date +%Y-%m-%d).zip nuke"
            :cwd "."}}]}
