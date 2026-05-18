@@ -86,28 +86,35 @@
       (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"" bin-name))))
 
 (defn exec-compile [config]
-  (println "Compiling Java files...")
   (shell/sh "mkdir -p classes")
   (let [src-dir (or (:src-dir config) "src/main")
-        java-files (find-java-files src-dir)]
-    (if (> (count java-files) 0)
-      (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
-                      (if (= 0 (:code res))
-                        (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
-                        ""))
-            cp-arg (if (empty? cp-jars) "" (str "-cp \"" cp-jars "\""))
-            encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
-            opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
-            files-arg (str/join " " java-files)
-            cmd (str (get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " opts-arg " " files-arg)]
-        (println "Running javac: " cmd)
-        (let [res (shell/sh cmd)]
-          (if (not (= 0 (:code res)))
-            (do
-              (println "Compilation failed!")
-              (println (:stderr res))
-              (sys-exit 1)))))
-      (println "No java files found. Skipping compilation."))))
+        check-res (shell/sh (str "find " src-dir " -name '*.java' -newer classes/.last_compile 2>/dev/null | head -n 1"))
+        needs-compile (or (not (io/exists? "classes/.last_compile")) 
+                          (> (count (str/trim (:stdout check-res))) 0))]
+    (if needs-compile
+      (let [java-files (find-java-files src-dir)]
+        (if (> (count java-files) 0)
+          (do
+            (println "Compiling Java files...")
+            (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
+                            (if (= 0 (:code res))
+                              (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
+                              ""))
+                  cp-arg (if (empty? cp-jars) "" (str "-cp \"" cp-jars "\""))
+                  encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
+                  opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
+                  files-arg (str/join " " java-files)
+                  cmd (str (get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " opts-arg " " files-arg)]
+              (println "Running javac: " cmd)
+              (let [res (shell/sh cmd)]
+                (if (not (= 0 (:code res)))
+                  (do
+                    (println "Compilation failed!")
+                    (println (:stderr res))
+                    (sys-exit 1))
+                  (shell/sh "touch classes/.last_compile")))))
+          (println "No java files found. Skipping compilation.")))
+      (println "Source files unchanged. Skipping compilation."))))
 
 (defn exec-jar-prep [config]
   (println "Preparing standard jar...")
