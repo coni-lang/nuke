@@ -212,42 +212,52 @@
          "</project>\n")))
 
 (defn exec-test [config]
-  (println "Running tests...")
   (let [test-dir (or (:test-dir config) "src/tests")]
     (if (io/exists? test-dir)
-      (let [java-files (find-java-files test-dir)]
-        (if (> (count java-files) 0)
-          (do
-            (shell/sh "mkdir -p test-classes")
-            (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
-                            (if (= 0 (:code res))
-                              (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
-                              ""))
-                  cp-arg (str "-cp \"classes:test-classes" (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
-                  files-arg (str/join " " java-files)
-                  cmd (str (get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
-              (println "Compiling tests...")
-              (let [res (shell/sh cmd)]
-                (if (not (= 0 (:code res)))
-                  (do
-                    (println "Test compilation failed!")
-                    (println (:stderr res))
-                    (sys-exit 1))
-                  (let [test-classes (let [res2 (shell/sh (str "find " test-dir " -name \"*Test.java\" | sed 's|^" test-dir "/||; s|\\.java$||; s|/|.|g'"))]
-                                       (if (= 0 (:code res2)) (str/trim (:stdout res2)) ""))]
-                    (if (not (empty? test-classes))
-                      (let [test-cmd (str (get-java-bin config "java") " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " "))]
-                        (let [test-res (shell/sh test-cmd)]
-                          (shell/sh "mkdir -p target")
-                          (io/write-file "target/test-report.txt" (:stdout test-res))
-                          (println (:stdout test-res))
-                          (if (not (= 0 (:code test-res)))
-                            (do
-                              (println "Tests failed! Check target/test-report.txt for details.")
-                              (println (:stderr test-res)))
-                            (println "All tests passed! Report saved to target/test-report.txt."))))
-                      (println "No *Test.java files found to run.")))))))
-          (println "No test java files found.")))
+      (do
+        (shell/sh "mkdir -p test-classes")
+        (let [check-src-res (shell/sh (str "find " test-dir " -name '*.java' -newer test-classes/.last_test_compile 2>/dev/null | head -n 1"))
+              check-classes-res (shell/sh "find classes -name '.last_compile' -newer test-classes/.last_test_compile 2>/dev/null | head -n 1")
+              needs-compile (or (not (io/exists? "test-classes/.last_test_compile")) 
+                                (> (count (str/trim (:stdout check-src-res))) 0)
+                                (> (count (str/trim (:stdout check-classes-res))) 0))]
+          (if needs-compile
+            (let [java-files (find-java-files test-dir)]
+              (if (> (count java-files) 0)
+                (do
+                  (println "Running tests...")
+                  (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
+                                  (if (= 0 (:code res))
+                                    (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
+                                    ""))
+                        cp-arg (str "-cp \"classes:test-classes" (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
+                        files-arg (str/join " " java-files)
+                        cmd (str (get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
+                    (println "Compiling tests...")
+                    (let [res (shell/sh cmd)]
+                      (if (not (= 0 (:code res)))
+                        (do
+                          (println "Test compilation failed!")
+                          (println (:stderr res))
+                          (sys-exit 1))
+                        (let [test-classes (let [res2 (shell/sh (str "find " test-dir " -name \"*Test.java\" | sed 's|^" test-dir "/||; s|\\.java$||; s|/|.|g'"))]
+                                             (if (= 0 (:code res2)) (str/trim (:stdout res2)) ""))]
+                          (if (not (empty? test-classes))
+                            (let [test-cmd (str (get-java-bin config "java") " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " "))]
+                              (let [test-res (shell/sh test-cmd)]
+                                (shell/sh "mkdir -p target")
+                                (io/write-file "target/test-report.txt" (:stdout test-res))
+                                (println (:stdout test-res))
+                                (if (not (= 0 (:code test-res)))
+                                  (do
+                                    (println "Tests failed! Check target/test-report.txt for details.")
+                                    (println (:stderr test-res)))
+                                  (do
+                                    (println "All tests passed! Report saved to target/test-report.txt.")
+                                    (shell/sh "touch test-classes/.last_test_compile")))))
+                            (println "No *Test.java files found to run.")))))))
+                (println "No test java files found.")))
+            (println "Test source files and main classes unchanged. Skipping tests."))))
       (println "No test directory found."))))
 
 (defn exec-run [config]
