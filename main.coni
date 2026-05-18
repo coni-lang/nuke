@@ -122,73 +122,50 @@
           (log/warn "No java files found. Skipping compilation.")))
       (log/success "Source files unchanged. Skipping compilation."))))
 
-(defn exec-jar-prep [config]
-  (log/step "Preparing standard jar...")
-  (shell/sh "mkdir -p target std-classes")
+(defn prep-jar [config step-msg classes-dir is-uberjar]
+  (log/step step-msg)
+  (shell/sh (str "mkdir -p target " classes-dir))
+  (if is-uberjar
+    (do
+      (log/info "Unzipping dependency jars...")
+      (shell/sh (str "for jar in libs/*.jar; do unzip -q -o \"$jar\" -d " classes-dir "/ 2>/dev/null || true; done"))))
   (log/info "Copying compiled classes...")
-  (shell/sh "cp -R classes/* std-classes/ 2>/dev/null || true")
+  (shell/sh (str "cp -R classes/* " classes-dir "/ 2>/dev/null || true"))
   (log/info "Copying resources...")
   (let [res-dir (or (:resource-dir config) "src/main/resources")]
-    (shell/sh (str "if [ -d " res-dir " ]; then cp -R " res-dir "/* std-classes/ 2>/dev/null || true; fi")))
+    (shell/sh (str "if [ -d " res-dir " ]; then cp -R " res-dir "/* " classes-dir "/ 2>/dev/null || true; fi")))
   (log/info "Writing Manifest...")
   (let [main-class (:main-class config)]
     (if main-class
       (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))
       (io/write-file "Manifest.txt" ""))))
+
+(defn build-jar [config task-id classes-dir out-suffix]
+  (let [app-version (or (:version config) "1.0.0")
+        app-name (or (:name config) "app")
+        tname (:task-name config)
+        suffix (if (and tname (not (= tname task-id))) (str "-" tname) "")
+        default-jar (str "target/" app-name "-" app-version suffix out-suffix)
+        jar-name (or (:jar-name config) default-jar)]
+    (shell/sh (str "mkdir -p \"$(dirname '" jar-name "')\""))
+    (let [cmd (str (get-java-bin config "jar") " cfm '" jar-name "' Manifest.txt -C " classes-dir " .")]
+      (log/info (str "Running: " cmd))
+      (let [res (shell/sh cmd)]
+        (if (not (= 0 (:code res)))
+          (do
+            (log/error "Jar creation failed!")
+            (println (:stderr res))
+            (sys-exit 1))
+          (log/success (str "Successfully created " jar-name)))))))
 
 (defn exec-jar [config]
-  (exec-jar-prep config)
-  (let [app-version (or (:version config) "1.0.0")
-        app-name (or (:name config) "app")
-        tname (:task-name config)
-        suffix (if (and tname (not (= tname "jar"))) (str "-" tname) "")
-        default-jar (str "target/" app-name "-" app-version suffix ".jar")
-        jar-name (or (:jar-name config) default-jar)]
-    (shell/sh (str "mkdir -p \"$(dirname '" jar-name "')\""))
-    (let [cmd (str (get-java-bin config "jar") " cfm '" jar-name "' Manifest.txt -C std-classes .")]
-      (log/info (str "Running: " cmd))
-      (let [res (shell/sh cmd)]
-        (if (not (= 0 (:code res)))
-          (do
-            (log/error "Jar creation failed!")
-            (println (:stderr res))
-            (sys-exit 1))
-          (log/success (str "Successfully created " jar-name)))))))
-
-(defn exec-uberjar-prep [config]
-  (log/step "Creating uberjar...")
-  (shell/sh "mkdir -p target uber-classes")
-  (log/info "Unzipping dependency jars...")
-  (shell/sh "for jar in libs/*.jar; do unzip -q -o \"$jar\" -d uber-classes/ 2>/dev/null || true; done")
-  (log/info "Copying compiled classes...")
-  (shell/sh "cp -R classes/* uber-classes/ 2>/dev/null || true")
-  (log/info "Copying resources...")
-  (let [res-dir (or (:resource-dir config) "src/main/resources")]
-    (shell/sh (str "if [ -d " res-dir " ]; then cp -R " res-dir "/* uber-classes/ 2>/dev/null || true; fi")))
-  (log/info "Writing Manifest...")
-  (let [main-class (:main-class config)]
-    (if main-class
-      (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))
-      (io/write-file "Manifest.txt" ""))))
+  (prep-jar config "Preparing standard jar..." "std-classes" false)
+  (build-jar config "jar" "std-classes" ".jar"))
 
 (defn exec-uberjar [config]
-  (exec-uberjar-prep config)
-  (let [app-version (or (:version config) "1.0.0")
-        app-name (or (:name config) "app")
-        tname (:task-name config)
-        suffix (if (and tname (not (= tname "uberjar"))) (str "-" tname) "")
-        default-jar (str "target/" app-name "-" app-version suffix "-uberjar.jar")
-        jar-name (or (:jar-name config) default-jar)]
-    (shell/sh (str "mkdir -p \"$(dirname '" jar-name "')\""))
-    (let [cmd (str (get-java-bin config "jar") " cfm '" jar-name "' Manifest.txt -C uber-classes .")]
-      (log/info (str "Running: " cmd))
-      (let [res (shell/sh cmd)]
-        (if (not (= 0 (:code res)))
-          (do
-            (log/error "Jar creation failed!")
-            (println (:stderr res))
-            (sys-exit 1))
-          (log/success (str "Successfully created " jar-name)))))))
+  (prep-jar config "Creating uberjar..." "uber-classes" true)
+  (build-jar config "uberjar" "uber-classes" "-uberjar.jar"))
+
 
 (defn generate-pom [config]
   (let [name (or (:name config) "app")
@@ -378,11 +355,8 @@
 (register-task "upload" ["zip"] "Upload the jar and POM to Nexus" exec-upload)
 (register-task "build" ["upload"] "Run the full build pipeline" (fn [config] (log/success "Build complete.")))
 
-(defn has-key? [m k]
-  (not (= (get m k :not-found) :not-found)))
-
 (defn run-task-graph [task-name config completed]
-  (if (has-key? completed task-name)
+  (if (not (= (get completed task-name :not-found) :not-found))
     completed
     (let [task (get @global-tasks task-name)]
       (if (nil? task)
