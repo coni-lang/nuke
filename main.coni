@@ -100,9 +100,9 @@
                         (println (:stderr res))
                         (sys-exit 1))
                       (do
-                        (log-info (str "Copying local dependency jar from " lpath "..."))
-                        (shell/sh (str "cp " lpath "/target/*.jar libs/ 2>/dev/null || true"))
-                        (shell/sh (str "cp " lpath "/libs/*.jar libs/ 2>/dev/null || true")))))))
+                        (log-info (str "Linking/Copying local dependency jar from " lpath "..."))
+                        (shell/sh (str "for j in $(cd " lpath " && pwd)/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
+                        (shell/sh (str "for j in $(cd " lpath " && pwd)/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true")))))))
               (recur (rest rem)))))))))
 
 (defn get-java-bin [config bin-name]
