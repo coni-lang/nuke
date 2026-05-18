@@ -21,4 +21,8 @@ tasks {
         sourceCompatibility = "17"
         targetCompatibility = "17"
     }
+    
+    patchPluginXml {
+        untilBuild.set("")
+    }
 }
