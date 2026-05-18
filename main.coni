@@ -324,16 +324,17 @@
         (println (str "Successfully created " zip-name))))))
 
 (defn exec-template [config]
-  (println "Running templates...")
   (let [tpls (:templates config)]
     (if tpls
-      (loop [rem tpls]
-        (if (empty? rem) nil
-          (let [tpl (first rem)]
-            (println (str "Processing template " tpl))
-            ;; Future templating logic goes here
-            (recur (rest rem)))))
-      (println "No :templates defined in config."))))
+      (do
+        (println "Running templates...")
+        (loop [rem tpls]
+          (if (empty? rem) nil
+            (let [tpl (first rem)]
+              (println (str "Processing template " tpl))
+              ;; Future templating logic goes here
+              (recur (rest rem))))))
+      nil)))
 
 (def global-tasks (atom {}))
 (def global-task-list (atom []))
