@@ -1,2 +1,4 @@
 {:name "example-java-lib"
- :version "1.0.0"}
+ :version "1.0.0"
+ :group-id "com.example"
+ :local-dependencies ["../example-math-lib"]}

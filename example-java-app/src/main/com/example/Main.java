@@ -5,7 +5,7 @@ import java.util.Properties;
 
 public class Main {
     public static void main(String[] args) {
-        System.out.println("Result: " + MathLib.add(10, 7));
+        System.out.println("Result: " + MathLib.multiplyAndAdd(5, 3, 2));
         
         try (InputStream input = Main.class.getClassLoader().getResourceAsStream("config.properties")) {
             if (input == null) {

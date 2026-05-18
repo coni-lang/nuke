@@ -17,3 +17,7 @@ std-classes
 libmlx_c.dylib
 .lsp
 .cl-kondo
+*.jar
+.build
+*.iml
+.idea

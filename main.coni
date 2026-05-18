@@ -54,7 +54,7 @@
 ;; Task Implementations
 (defn exec-clean [config]
   (log-step "Cleaning build directories...")
-  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "target" "libs"])
+  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs"])
         targets-str (str/join " " clean-targets)]
     (shell/sh (str "rm -rf " targets-str))))
 
@@ -100,7 +100,8 @@
                         (sys-exit 1))
                       (do
                         (log-info (str "Copying local dependency jar from " lpath "..."))
-                        (shell/sh (str "cp " lpath "/target/*.jar libs/ 2>/dev/null || true")))))))
+                        (shell/sh (str "cp " lpath "/target/*.jar libs/ 2>/dev/null || true"))
+                        (shell/sh (str "cp " lpath "/libs/*.jar libs/ 2>/dev/null || true")))))))
               (recur (rest rem)))))))))
 
 (defn get-java-bin [config bin-name]
