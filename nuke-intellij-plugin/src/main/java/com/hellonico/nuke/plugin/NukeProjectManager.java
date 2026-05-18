@@ -114,7 +114,8 @@ public class NukeProjectManager {
         return new File(basePath).getName();
     }
 
-    private static void processDependenciesRecursively(Project project, Module parentModule, String moduleBasePath, java.util.Set<String> processed, java.util.Set<String> localProjectNames) {
+    // Phase 1: collect all local dependency directories recursively (no write action needed)
+    private static void collectDependencies(String moduleBasePath, java.util.Set<String> processed, java.util.List<File> collectedDirs, java.util.Set<String> localProjectNames) {
         if (processed.contains(moduleBasePath)) return;
         processed.add(moduleBasePath);
 
@@ -123,64 +124,9 @@ public class NukeProjectManager {
             try {
                 File depDir = new File(moduleBasePath, relPath).getCanonicalFile();
                 if (depDir.exists() && depDir.isDirectory()) {
-                    String depName = depDir.getName();
-                    String projName = getProjectName(depDir.getAbsolutePath());
-                    localProjectNames.add(projName);
-                    
-                    com.intellij.openapi.module.ModifiableModuleModel moduleModel = ModuleManager.getInstance(project).getModifiableModel();
-                    Module depModule = moduleModel.findModuleByName(depName);
-                    if (depModule == null) {
-                        String imlPath = depDir.getAbsolutePath() + "/" + depName + ".iml";
-                        depModule = moduleModel.newModule(imlPath, "JAVA_MODULE");
-                    }
-                    moduleModel.commit();
-                    
-                    final Module finalDepModule = depModule;
-                    ModuleRootModificationUtil.updateModel(depModule, depModel -> {
-                        depModel.inheritSdk();
-                        depModel.inheritSdk();
-                        ContentEntry entry = null;
-                        for (ContentEntry e : depModel.getContentEntries()) {
-                            if (e.getUrl().equals(VfsUtil.pathToUrl(depDir.getAbsolutePath()))) {
-                                entry = e;
-                                break;
-                            }
-                        }
-                        if (entry == null) {
-                            VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath());
-                            entry = root != null ? depModel.addContentEntry(root) : depModel.addContentEntry(VfsUtil.pathToUrl(depDir.getAbsolutePath()));
-                        }
-                        
-                        entry.clearSourceFolders();
-                        java.util.List<String> srcDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":src-dirs");
-                        if (srcDirs.isEmpty()) srcDirs.add("src/main");
-                        for (String dir : srcDirs) {
-                            VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/" + dir);
-                            if (vf != null) entry.addSourceFolder(vf, false);
-                        }
-                        
-                        java.util.List<String> testDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":test-dirs");
-                        if (testDirs.isEmpty()) testDirs.add("src/tests");
-                        for (String dir : testDirs) {
-                            VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/" + dir);
-                            if (vf != null) entry.addSourceFolder(vf, true);
-                        }
-                        
-                        
-                        VirtualFile resources = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/src/main/resources");
-                        if (resources != null) entry.addSourceFolder(resources, JavaResourceRootType.RESOURCE);
-
-                        CompilerModuleExtension compilerExtension = depModel.getModuleExtension(CompilerModuleExtension.class);
-                        if (compilerExtension != null) {
-                            compilerExtension.inheritCompilerOutputPath(false);
-                            compilerExtension.setCompilerOutputPath(VfsUtil.pathToUrl(depDir.getAbsolutePath() + "/build/classes/java/main"));
-                            compilerExtension.setCompilerOutputPathForTests(VfsUtil.pathToUrl(depDir.getAbsolutePath() + "/build/classes/java/test"));
-                        }
-                    });
-                    
-                    ModuleRootModificationUtil.addDependency(parentModule, depModule);
-                    
-                    processDependenciesRecursively(project, depModule, depDir.getAbsolutePath(), processed, localProjectNames);
+                    localProjectNames.add(getProjectName(depDir.getAbsolutePath()));
+                    collectedDirs.add(depDir);
+                    collectDependencies(depDir.getAbsolutePath(), processed, collectedDirs, localProjectNames);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -191,22 +137,41 @@ public class NukeProjectManager {
     private static void updateClasspath(Project project) {
         String basePath = project.getBasePath();
         if (basePath == null) return;
-        
+
+        // --- Phase 1: collect dep dirs without touching IntelliJ models ---
+        java.util.Set<String> processed = new java.util.HashSet<>();
+        java.util.List<File> depDirs = new java.util.ArrayList<>();
+        java.util.Set<String> localProjectNames = new java.util.HashSet<>();
+        collectDependencies(basePath, processed, depDirs, localProjectNames);
+
+        // --- Phase 2: create / find all modules in ONE write action with ONE commit ---
         ApplicationManager.getApplication().runWriteAction(() -> {
+            // Ensure root module exists
             Module[] modules = ModuleManager.getInstance(project).getModules();
-            Module module;
+            Module rootModule;
+            com.intellij.openapi.module.ModifiableModuleModel moduleModel = ModuleManager.getInstance(project).getModifiableModel();
             if (modules.length == 0) {
-                com.intellij.openapi.module.ModifiableModuleModel moduleModel = ModuleManager.getInstance(project).getModifiableModel();
-                module = moduleModel.newModule(basePath + "/" + project.getName() + ".iml", "JAVA_MODULE");
-                moduleModel.commit();
+                rootModule = moduleModel.newModule(basePath + "/" + project.getName() + ".iml", "JAVA_MODULE");
             } else {
-                module = modules[0];
+                rootModule = modules[0];
             }
 
+            // Create all dep modules that don't exist yet
+            java.util.Map<File, Module> depModuleMap = new java.util.LinkedHashMap<>();
+            for (File depDir : depDirs) {
+                String depName = depDir.getName();
+                Module depModule = moduleModel.findModuleByName(depName);
+                if (depModule == null) {
+                    depModule = moduleModel.newModule(depDir.getAbsolutePath() + "/" + depName + ".iml", "JAVA_MODULE");
+                }
+                depModuleMap.put(depDir, depModule);
+            }
+            moduleModel.commit(); // single commit for all module creations
+
+            // Set JDK
             Sdk projectSdk = ProjectRootManager.getInstance(project).getProjectSdk();
             if (projectSdk == null) {
-                Sdk[] jdks = ProjectJdkTable.getInstance().getAllJdks();
-                for (Sdk sdk : jdks) {
+                for (Sdk sdk : ProjectJdkTable.getInstance().getAllJdks()) {
                     if (sdk.getSdkType() instanceof JavaSdk) {
                         ProjectRootManager.getInstance(project).setProjectSdk(sdk);
                         break;
@@ -214,70 +179,85 @@ public class NukeProjectManager {
                 }
             }
 
-            // Process local dependencies recursively BEFORE building NukeDeps to know which jars to exclude
-            java.util.Set<String> processed = new java.util.HashSet<>();
-            java.util.Set<String> localProjectNames = new java.util.HashSet<>();
-            processDependenciesRecursively(project, module, basePath, processed, localProjectNames);
-
+            // Remove stale modules
             java.util.Set<String> validModuleNames = new java.util.HashSet<>();
-            validModuleNames.add(module.getName());
-            for (String processedPath : processed) {
-                validModuleNames.add(new File(processedPath).getName());
+            validModuleNames.add(rootModule.getName());
+            for (File d : depDirs) validModuleNames.add(d.getName());
+
+            com.intellij.openapi.module.ModifiableModuleModel pruneModel = ModuleManager.getInstance(project).getModifiableModel();
+            for (Module m : pruneModel.getModules()) {
+                if (!validModuleNames.contains(m.getName())) pruneModel.disposeModule(m);
+            }
+            pruneModel.commit();
+
+            // --- Phase 3: configure content roots and add module dependencies ---
+            for (java.util.Map.Entry<File, Module> entry : depModuleMap.entrySet()) {
+                File depDir = entry.getKey();
+                Module depModule = entry.getValue();
+                ModuleRootModificationUtil.updateModel(depModule, depModel -> {
+                    depModel.inheritSdk();
+                    ContentEntry ce = null;
+                    for (ContentEntry e : depModel.getContentEntries()) {
+                        if (e.getUrl().equals(VfsUtil.pathToUrl(depDir.getAbsolutePath()))) { ce = e; break; }
+                    }
+                    if (ce == null) {
+                        VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath());
+                        ce = root != null ? depModel.addContentEntry(root) : depModel.addContentEntry(VfsUtil.pathToUrl(depDir.getAbsolutePath()));
+                    }
+                    ce.clearSourceFolders();
+                    java.util.List<String> srcDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":src-dirs");
+                    if (srcDirs.isEmpty()) srcDirs.add("src/main");
+                    for (String dir : srcDirs) {
+                        VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/" + dir);
+                        if (vf != null) ce.addSourceFolder(vf, false);
+                    }
+                    java.util.List<String> testDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":test-dirs");
+                    if (testDirs.isEmpty()) testDirs.add("src/tests");
+                    for (String dir : testDirs) {
+                        VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/" + dir);
+                        if (vf != null) ce.addSourceFolder(vf, true);
+                    }
+                    VirtualFile resources = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/src/main/resources");
+                    if (resources != null) ce.addSourceFolder(resources, JavaResourceRootType.RESOURCE);
+                });
+                ModuleRootModificationUtil.addDependency(rootModule, depModule);
             }
 
-            com.intellij.openapi.module.ModifiableModuleModel modifiableModel = ModuleManager.getInstance(project).getModifiableModel();
-            for (Module m : modifiableModel.getModules()) {
-                if (!validModuleNames.contains(m.getName())) {
-                    modifiableModel.disposeModule(m);
-                }
-            }
-            modifiableModel.commit();
-
+            // --- Phase 4: configure root module jars (excluding local project jars) ---
             File libsDir = new File(basePath, "libs");
             List<String> jarUrls = new ArrayList<>();
             if (libsDir.exists() && libsDir.isDirectory()) {
-                for (File f : libsDir.listFiles()) {
-                    if (f.getName().endsWith(".jar")) {
+                File[] libFiles = libsDir.listFiles();
+                if (libFiles != null) {
+                    for (File f : libFiles) {
+                        if (!f.getName().endsWith(".jar")) continue;
                         boolean isLocal = false;
                         for (String lpn : localProjectNames) {
-                            if (f.getName().startsWith(lpn + "-")) {
-                                isLocal = true;
-                                break;
-                            }
+                            if (f.getName().startsWith(lpn + "-")) { isLocal = true; break; }
                         }
-                        if (!isLocal) {
-                            jarUrls.add(VfsUtil.getUrlForLibraryRoot(f));
-                        }
+                        if (!isLocal) jarUrls.add(VfsUtil.getUrlForLibraryRoot(f));
                     }
                 }
             }
 
-            ModuleRootModificationUtil.updateModel(module, model -> {
+            ModuleRootModificationUtil.updateModel(rootModule, model -> {
                 model.inheritSdk();
                 LibraryTable table = model.getModuleLibraryTable();
                 Library library = table.getLibraryByName("NukeDeps");
-                if (library != null) {
-                    table.removeLibrary(library);
-                }
+                if (library != null) table.removeLibrary(library);
                 library = table.createLibrary("NukeDeps");
                 Library.ModifiableModel libModel = library.getModifiableModel();
-                for (String url : jarUrls) {
-                    libModel.addRoot(url, OrderRootType.CLASSES);
-                }
+                for (String url : jarUrls) libModel.addRoot(url, OrderRootType.CLASSES);
                 libModel.commit();
 
                 ContentEntry entry = null;
                 for (ContentEntry e : model.getContentEntries()) {
-                    if (e.getUrl().equals(VfsUtil.pathToUrl(basePath))) {
-                        entry = e;
-                        break;
-                    }
+                    if (e.getUrl().equals(VfsUtil.pathToUrl(basePath))) { entry = e; break; }
                 }
                 if (entry == null) {
                     VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath);
                     entry = root != null ? model.addContentEntry(root) : model.addContentEntry(VfsUtil.pathToUrl(basePath));
                 }
-                
                 entry.clearSourceFolders();
                 java.util.List<String> srcDirs = parseArray(basePath + "/nuke.edn", ":src-dirs");
                 if (srcDirs.isEmpty()) srcDirs.add("src/main");
@@ -285,17 +265,14 @@ public class NukeProjectManager {
                     VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/" + dir);
                     if (vf != null) entry.addSourceFolder(vf, false);
                 }
-                
                 java.util.List<String> testDirs = parseArray(basePath + "/nuke.edn", ":test-dirs");
                 if (testDirs.isEmpty()) testDirs.add("src/tests");
                 for (String dir : testDirs) {
                     VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/" + dir);
                     if (vf != null) entry.addSourceFolder(vf, true);
                 }
-                
                 VirtualFile resources = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/src/main/resources");
                 if (resources != null) entry.addSourceFolder(resources, JavaResourceRootType.RESOURCE);
-
                 CompilerModuleExtension compilerExtension = model.getModuleExtension(CompilerModuleExtension.class);
                 if (compilerExtension != null) {
                     compilerExtension.inheritCompilerOutputPath(false);
