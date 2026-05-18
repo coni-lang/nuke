@@ -3,11 +3,10 @@ package com.hellonico.nuke.plugin;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
-import com.intellij.openapi.actionSystem.CommonDataKeys;
-import com.intellij.openapi.actionSystem.PlatformDataKeys;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.vfs.VirtualFile;
 import org.jetbrains.annotations.NotNull;
+
+import java.io.File;
 
 public class NukeReloadFileAction extends AnAction {
 
@@ -16,14 +15,15 @@ public class NukeReloadFileAction extends AnAction {
         return ActionUpdateThread.BGT;
     }
 
+    private static boolean hasNukeEdn(Project project) {
+        if (project == null || project.getBasePath() == null) return false;
+        return new File(project.getBasePath(), "nuke.edn").exists();
+    }
+
     @Override
     public void update(@NotNull AnActionEvent e) {
-        VirtualFile file = e.getData(CommonDataKeys.VIRTUAL_FILE);
-        if (file == null) {
-            file = e.getData(PlatformDataKeys.VIRTUAL_FILE);
-        }
-        boolean visible = file != null && "nuke.edn".equals(file.getName());
-        e.getPresentation().setEnabledAndVisible(visible);
+        // Show whenever this is a Nuke project (has nuke.edn at the root)
+        e.getPresentation().setEnabledAndVisible(hasNukeEdn(e.getProject()));
     }
 
     @Override
