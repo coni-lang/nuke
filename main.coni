@@ -3,7 +3,27 @@
 (require "libs/str/src/str.coni" :as str)
 (require "libs/edn/src/edn.coni" :as edn)
 
+(def col-reset "\033[0m")
+(def col-green "\033[32m")
+(def col-blue "\033[34m")
+(def col-red "\033[31m")
+(def col-yellow "\033[33m")
+(def col-cyan "\033[36m")
 
+(defn log-step [msg]
+  (println (str col-blue "==> " col-reset col-cyan msg col-reset)))
+
+(defn log-success [msg]
+  (println (str col-green "  ✓ " col-reset msg)))
+
+(defn log-warn [msg]
+  (println (str col-yellow "  ! " col-reset msg)))
+
+(defn log-error [msg]
+  (println (str col-red "  ✗ " col-reset msg)))
+
+(defn log-info [msg]
+  (println (str "    " msg)))
 
 (defprotocol Task
   (get-name [this])
@@ -29,7 +49,7 @@
 
 ;; Task Implementations
 (defn exec-clean [config]
-  (println "Cleaning build directories...")
+  (log-step "Cleaning build directories...")
   (let [clean-targets (or (:clean config) ["classes" "uber-classes" "target" "libs"])
         targets-str (str/join " " clean-targets)]
     (shell/sh (str "rm -rf " targets-str))))
@@ -54,7 +74,7 @@
                   filepath (str "libs/" filename)]
               (if (not (io/exists? filepath))
                 (do
-                  (println (str "Downloading " filename " from " url "..."))
+                  (log-info (str "Downloading " filename " from " url "..."))
                   (shell/sh (str "curl -L -s -o " filepath " " url))))
               (recur (rest rem))))))))
   (let [local-deps (:local-dependencies config)]
@@ -95,7 +115,7 @@
       (let [java-files (find-java-files src-dir)]
         (if (> (count java-files) 0)
           (do
-            (println "Compiling Java files...")
+            (log-step "Compiling Java files...")
             (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
                             (if (= 0 (:code res))
                               (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
@@ -105,26 +125,26 @@
                   opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
                   files-arg (str/join " " java-files)
                   cmd (str (get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " opts-arg " " files-arg)]
-              (println "Running javac: " cmd)
+              (log-info (str "Running javac: " cmd))
               (let [res (shell/sh cmd)]
                 (if (not (= 0 (:code res)))
                   (do
-                    (println "Compilation failed!")
+                    (log-error "Compilation failed!")
                     (println (:stderr res))
                     (sys-exit 1))
                   (shell/sh "touch classes/.last_compile")))))
-          (println "No java files found. Skipping compilation.")))
-      (println "Source files unchanged. Skipping compilation."))))
+          (log-warn "No java files found. Skipping compilation.")))
+      (log-success "Source files unchanged. Skipping compilation."))))
 
 (defn exec-jar-prep [config]
-  (println "Preparing standard jar...")
+  (log-step "Preparing standard jar...")
   (shell/sh "mkdir -p target std-classes")
-  (println "Copying compiled classes...")
+  (log-info "Copying compiled classes...")
   (shell/sh "cp -R classes/* std-classes/ 2>/dev/null || true")
-  (println "Copying resources...")
+  (log-info "Copying resources...")
   (let [res-dir (or (:resource-dir config) "src/main/resources")]
     (shell/sh (str "if [ -d " res-dir " ]; then cp -R " res-dir "/* std-classes/ 2>/dev/null || true; fi")))
-  (println "Writing Manifest...")
+  (log-info "Writing Manifest...")
   (let [main-class (:main-class config)]
     (if main-class
       (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))
@@ -140,26 +160,26 @@
         jar-name (or (:jar-name config) default-jar)]
     (shell/sh (str "mkdir -p \"$(dirname '" jar-name "')\""))
     (let [cmd (str (get-java-bin config "jar") " cfm '" jar-name "' Manifest.txt -C std-classes .")]
-      (println "Running: " cmd)
+      (log-info (str "Running: " cmd))
       (let [res (shell/sh cmd)]
         (if (not (= 0 (:code res)))
           (do
-            (println "Jar creation failed!")
+            (log-error "Jar creation failed!")
             (println (:stderr res))
             (sys-exit 1))
-          (println (str "Successfully created " jar-name)))))))
+          (log-success (str "Successfully created " jar-name)))))))
 
 (defn exec-uberjar-prep [config]
-  (println "Creating uberjar...")
+  (log-step "Creating uberjar...")
   (shell/sh "mkdir -p target uber-classes")
-  (println "Unzipping dependency jars...")
+  (log-info "Unzipping dependency jars...")
   (shell/sh "for jar in libs/*.jar; do unzip -q -o \"$jar\" -d uber-classes/ 2>/dev/null || true; done")
-  (println "Copying compiled classes...")
+  (log-info "Copying compiled classes...")
   (shell/sh "cp -R classes/* uber-classes/ 2>/dev/null || true")
-  (println "Copying resources...")
+  (log-info "Copying resources...")
   (let [res-dir (or (:resource-dir config) "src/main/resources")]
     (shell/sh (str "if [ -d " res-dir " ]; then cp -R " res-dir "/* uber-classes/ 2>/dev/null || true; fi")))
-  (println "Writing Manifest...")
+  (log-info "Writing Manifest...")
   (let [main-class (:main-class config)]
     (if main-class
       (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))
@@ -175,14 +195,14 @@
         jar-name (or (:jar-name config) default-jar)]
     (shell/sh (str "mkdir -p \"$(dirname '" jar-name "')\""))
     (let [cmd (str (get-java-bin config "jar") " cfm '" jar-name "' Manifest.txt -C uber-classes .")]
-      (println "Running: " cmd)
+      (log-info (str "Running: " cmd))
       (let [res (shell/sh cmd)]
         (if (not (= 0 (:code res)))
           (do
-            (println "Jar creation failed!")
+            (log-error "Jar creation failed!")
             (println (:stderr res))
             (sys-exit 1))
-          (println (str "Successfully created " jar-name)))))))
+          (log-success (str "Successfully created " jar-name)))))))
 
 (defn generate-pom [config]
   (let [name (or (:name config) "app")
@@ -225,7 +245,7 @@
             (let [java-files (find-java-files test-dir)]
               (if (> (count java-files) 0)
                 (do
-                  (println "Running tests...")
+                  (log-step "Running tests...")
                   (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
                                   (if (= 0 (:code res))
                                     (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
@@ -233,11 +253,11 @@
                         cp-arg (str "-cp \"classes:test-classes" (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
                         files-arg (str/join " " java-files)
                         cmd (str (get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
-                    (println "Compiling tests...")
+                    (log-info "Compiling tests...")
                     (let [res (shell/sh cmd)]
                       (if (not (= 0 (:code res)))
                         (do
-                          (println "Test compilation failed!")
+                          (log-error "Test compilation failed!")
                           (println (:stderr res))
                           (sys-exit 1))
                         (let [test-classes (let [res2 (shell/sh (str "find " test-dir " -name \"*Test.java\" | sed 's|^" test-dir "/||; s|\\.java$||; s|/|.|g'"))]
@@ -250,24 +270,24 @@
                                 (println (:stdout test-res))
                                 (if (not (= 0 (:code test-res)))
                                   (do
-                                    (println "Tests failed! Check target/test-report.txt for details.")
+                                    (log-error "Tests failed! Check target/test-report.txt for details.")
                                     (println (:stderr test-res)))
                                   (do
-                                    (println "All tests passed! Report saved to target/test-report.txt.")
+                                    (log-success "All tests passed! Report saved to target/test-report.txt.")
                                     (shell/sh "touch test-classes/.last_test_compile")))))
-                            (println "No *Test.java files found to run.")))))))
-                (println "No test java files found.")))
-            (println "Test source files and main classes unchanged. Skipping tests."))))
-      (println "No test directory found."))))
+                            (log-warn "No *Test.java files found to run.")))))))
+                (log-warn "No test java files found.")))
+            (log-success "Test source files and main classes unchanged. Skipping tests."))))
+      (log-warn "No test directory found."))))
 
 (defn exec-run [config]
   (let [main-class (:main-class config)]
     (if (not main-class)
       (do
-        (println "Error: No :main-class defined in configuration.")
+        (log-error "Error: No :main-class defined in configuration.")
         (sys-exit 1))
       (do
-        (println (str "Running " main-class "..."))
+        (log-step (str "Running " main-class "..."))
         (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
                         (if (= 0 (:code res))
                           (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
@@ -278,14 +298,14 @@
           (let [res (shell/sh cmd)]
             (if (not (= 0 (:code res)))
               (do
-                (println "Run failed!")
+                (log-error "Run failed!")
                 (println (:stderr res))
                 (sys-exit 1))
               (if (not (empty? (str/trim (:stdout res))))
                 (println (str/trim (:stdout res)))))))))))
 
 (defn exec-upload [config]
-  (println "Uploading to Nexus...")
+  (log-step "Uploading to Nexus...")
   (let [pom-content (generate-pom config)]
     (io/write-file "target/pom.xml" pom-content)
     (let [app-version (if (:version config) (:version config) "1.0.0")]
@@ -312,10 +332,10 @@
                 (let [res (shell/sh cmd)]
                   (if (not (= 0 (:code res)))
                     (do
-                      (println "Upload failed!")
+                      (log-error "Upload failed!")
                       (println (:stderr res))
                       (sys-exit 1))
-                    (println "Successfully uploaded to Nexus!"))))))))))))))
+                    (log-success "Successfully uploaded to Nexus!"))))))))))))))
 
 (defn exec-zip [config]
   (let [app-version (or (:version config) "1.0.0")
@@ -325,7 +345,7 @@
         default-zip (str "target/" app-name "-" app-version suffix ".zip")
         zip-name (or (:zip-name config) default-zip)
         zip-base-name (or (:zip-name config) (str app-name "-" app-version suffix ".zip"))]
-    (println (str "Creating zip archive " zip-name "..."))
+    (log-step (str "Creating zip archive " zip-name "..."))
     (shell/sh (str "mkdir -p \"$(dirname '" zip-name "')\""))
     (if (:zip-includes config)
       (let [includes-str (str/join " " (:zip-includes config))
@@ -333,22 +353,22 @@
         (let [res (shell/sh cmd)]
            (if (not (= (:code res) 0))
              (do
-               (println "Zip failed!")
+               (log-error "Zip failed!")
                (println (:stderr res)))
-             (println (str "Successfully created " zip-name)))))
+             (log-success (str "Successfully created " zip-name)))))
       (let [cmd (str "cd target && zip -q '" zip-base-name "' *.jar *.txt *.pom 2>/dev/null || true")]
         (shell/sh cmd)
-        (println (str "Successfully created " zip-name))))))
+        (log-success (str "Successfully created " zip-name))))))
 
 (defn exec-template [config]
   (let [tpls (:templates config)]
     (if tpls
       (do
-        (println "Running templates...")
+        (log-step "Running templates...")
         (loop [rem tpls]
           (if (empty? rem) nil
             (let [tpl (first rem)]
-              (println (str "Processing template " tpl))
+              (log-info (str "Processing template " tpl))
               ;; Future templating logic goes here
               (recur (rest rem))))))
       nil)))
@@ -370,7 +390,7 @@
 (register-task "uberjar" ["test"] "Create an executable fat jar" exec-uberjar)
 (register-task "zip" ["uberjar"] "Create a distribution zip" exec-zip)
 (register-task "upload" ["zip"] "Upload the jar and POM to Nexus" exec-upload)
-(register-task "build" ["upload"] "Run the full build pipeline" (fn [config] (println "Build complete.")))
+(register-task "build" ["upload"] "Run the full build pipeline" (fn [config] (log-success "Build complete.")))
 
 (defn has-key? [m k]
   (not (= (get m k :not-found) :not-found)))
