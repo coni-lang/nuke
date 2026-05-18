@@ -11,4 +11,9 @@ sed -i '' "s~(def nuke-commit .*~(def nuke-commit \"$COMMIT\")~g" .build/main.co
 sed -i '' "s~(def nuke-build-time .*~(def nuke-build-time \"$DATE\")~g" .build/main.coni
 sed -i '' "s~(def nuke-commit-msg .*~(def nuke-commit-msg \"$MSG\")~g" .build/main.coni
 
-CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 /tmp/coni-compiler build .build/main.coni -o nuke
+if [ "$BUILD_ALL" = "1" ]; then
+    CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 /tmp/coni-compiler build .build/main.coni -o nuke
+    CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 /tmp/coni-compiler build .build/main.coni -o nuke.exe
+else
+    CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 /tmp/coni-compiler build .build/main.coni -o nuke
+fi
