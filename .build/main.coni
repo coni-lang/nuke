@@ -4,7 +4,7 @@
 (require "libs/edn/src/edn.coni" :as edn)
 
 (def nuke-version "1.0.1")
-(def nuke-build-time "2026-05-18T06:59:41Z")
+(def nuke-build-time "2026-05-18T07:03:28Z")
 (def nuke-commit "459c956")
 
 (def col-reset "\033[0m")

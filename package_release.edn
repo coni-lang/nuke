@@ -1,7 +1,7 @@
 {:name "Nuke Release"
  :tasks
  [{:name "Build Nuke (macOS)"
-   :shell {:cmd "CONI_HOME=/Users/nico/cool/coni-lang PATH=\"$PATH:/usr/local/go/bin:/opt/homebrew/bin\" CGO_ENABLED=0 /tmp/coni-compiler build main.coni -o nuke"
+   :shell {:cmd "sh ./build_nuke.sh"
            :cwd "."}}
   {:name "Build IntelliJ Plugin"
    :shell {:cmd "JAVA_HOME=~/.sdkman/candidates/java/17.0.10-tem ./gradlew buildPlugin"
