@@ -4,8 +4,9 @@
 (require "libs/edn/src/edn.coni" :as edn)
 
 (def nuke-version "1.0.1")
-(def nuke-build-time "2026-05-18T06:59:41Z")
-(def nuke-commit "459c956")
+(def nuke-build-time "DEV")
+(def nuke-commit "DEV")
+(def nuke-commit-msg "DEV")
 
 (def col-reset "\033[0m")
 (def col-green "\033[32m")
@@ -445,7 +446,7 @@
 (defn show-version []
   (println (str "Nuke Build Tool v" nuke-version))
   (println (str "Compiled at: " nuke-build-time))
-  (println (str "Commit: " nuke-commit)))
+  (println (str "Commit: " nuke-commit " - " nuke-commit-msg)))
 
 (def global-task-config (atom {}))
 
