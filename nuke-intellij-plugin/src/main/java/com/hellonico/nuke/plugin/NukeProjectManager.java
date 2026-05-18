@@ -38,7 +38,8 @@ public class NukeProjectManager {
         
         String os = System.getProperty("os.name").toLowerCase();
         boolean isWindows = os.contains("win");
-        String binName = isWindows ? "nuke.exe" : "nuke";
+        boolean isMac = os.contains("mac");
+        String binName = isWindows ? "nuke.exe" : (isMac ? "nuke-mac" : "nuke-linux");
         
         try {
             File tmpDir = new File(System.getProperty("java.io.tmpdir"), "nuke-intellij-plugin");
@@ -55,7 +56,7 @@ public class NukeProjectManager {
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return isWindows ? "nuke.exe" : "nuke";
+        return binName;
     }
 
     public static void sync(Project project) {
