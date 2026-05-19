@@ -91,9 +91,24 @@ public class NukeProjectManager {
         if (ednFile.exists()) {
             try {
                 String content = new String(java.nio.file.Files.readAllBytes(ednFile.toPath()));
-                java.util.regex.Matcher m = java.util.regex.Pattern.compile(":path\\s+\"([^\"]+)\"").matcher(content);
-                while (m.find()) {
-                    deps.add(m.group(1));
+                // Extract the :local-dependencies vector content
+                java.util.regex.Matcher section = java.util.regex.Pattern
+                        .compile(":local-dependencies\\s*\\[([^]]+)]")
+                        .matcher(content);
+                if (section.find()) {
+                    String block = section.group(1);
+                    // Match {:path "..."} format
+                    java.util.regex.Matcher pathMatcher = java.util.regex.Pattern
+                            .compile(":path\\s+\"([^\"]+)\"")
+                            .matcher(block);
+                    while (pathMatcher.find()) deps.add(pathMatcher.group(1));
+                    // Match plain string format: "..." (not inside a map)
+                    // Remove map entries first, then pick up bare strings
+                    String stripped = block.replaceAll("\\{[^}]*}", "");
+                    java.util.regex.Matcher strMatcher = java.util.regex.Pattern
+                            .compile("\"([^\"]+)\"")
+                            .matcher(stripped);
+                    while (strMatcher.find()) deps.add(strMatcher.group(1));
                 }
             } catch (Exception e) {}
         }
