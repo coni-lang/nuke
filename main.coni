@@ -34,11 +34,39 @@
       [])))
 
 ;; Task Implementations
+(defn clean-project [abs-path config]
+  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs"])
+        targets-str (loop [rem clean-targets acc ""]
+                      (if (empty? rem) acc
+                        (recur (rest rem) (str acc " '" abs-path "/" (first rem) "'"))))]
+    (shell/sh (str "rm -rf" targets-str))
+    
+    (let [tpls (:templates config)]
+      (if tpls
+        (loop [rem tpls]
+          (if (not (empty? rem))
+            (let [tpl (first rem)
+                  out-file (if (string? tpl) (str/replace tpl ".template" "") (:out tpl))]
+              (shell/sh (str "rm -f '" abs-path "/" out-file "'"))
+              (recur (rest rem)))))))
+              
+    (let [local-deps (:local-dependencies config)]
+      (if local-deps
+        (loop [rem local-deps]
+          (if (not (empty? rem))
+            (let [ldep (first rem)
+                  lpath (if (string? ldep) ldep (:path ldep))]
+              (if lpath
+                (let [sub-abs (str/trim (:stdout (shell/sh (str "cd '" abs-path "/" lpath "' && pwd"))))
+                      edn-file (str sub-abs "/nuke.edn")
+                      sub-cfg (if (io/exists? edn-file) (edn/parse-edn (io/read-file edn-file)) {})]
+                  (clean-project sub-abs sub-cfg)))
+              (recur (rest rem)))))))))
+
 (defn exec-clean [config]
   (log/step "Cleaning build directories...")
-  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs"])
-        targets-str (str/join " " clean-targets)]
-    (shell/sh (str "rm -rf " targets-str))))
+  (let [pwd (str/trim (:stdout (shell/sh "pwd")))]
+    (clean-project pwd config)))
 
 ; Build a local dependency jar entirely in-process (no external nuke subprocess).
 ; Reads the dep's nuke.edn, downloads its Maven deps, recurses into its local deps,
