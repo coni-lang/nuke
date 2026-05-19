@@ -22,3 +22,9 @@ libmlx_c.dylib
 .build
 *.iml
 .idea
+bin
+example-maven-project/nuke
+example-java-uberjar/nuke
+example-java-standard/nuke
+nuke-mac
+nuke-linux
