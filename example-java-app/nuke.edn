@@ -2,4 +2,5 @@
  :version "1.0.0"
  :main-class "com.example.Main"
  :local-dependencies [{:path "../example-java-lib"}
-                      {:path "../example-java-properties"}]}
+                      {:path "../example-java-properties"}
+                      {:path "../example-java-templates"}]}

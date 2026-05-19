@@ -1,0 +1,3 @@
+Hello! This is a Nuke template!
+Project Name: ${name}
+Project Version: ${version}

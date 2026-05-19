@@ -1,0 +1,4 @@
+{:name "example-java-templates"
+ :version "1.0.0"
+ :group-id "com.example"
+ :templates ["src/main/resources/config.txt.template"]}

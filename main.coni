@@ -88,6 +88,23 @@
                         (shell/sh (str "for j in " sub-abs "/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" '" abs-path "/libs/' 2>/dev/null || cp \"$j\" '" abs-path "/libs/'; }; done || true"))
                         (shell/sh (str "for j in " sub-abs "/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" '" abs-path "/libs/' 2>/dev/null || cp \"$j\" '" abs-path "/libs/'; }; done || true"))))
                     (recur (rest rem))))))))
+        ; 2.5 Process templates
+        (let [tpls (:templates dep-cfg)]
+          (if tpls
+            (loop [rem tpls]
+              (if (not (empty? rem))
+                (let [tpl (first rem)
+                      in-file (str abs-path "/" (if (string? tpl) tpl (:in tpl)))
+                      out-file (str abs-path "/" (if (string? tpl) (str/replace tpl ".template" "") (:out tpl)))]
+                  (if (io/exists? in-file)
+                    (let [content (io/read-file in-file)
+                          name (or (:name dep-cfg) "unknown")
+                          version (or (:version dep-cfg) "unknown")
+                          res1 (str/replace content "${name}" name)
+                          res2 (str/replace res1 "${version}" version)]
+                      (shell/sh (str "mkdir -p \"$(dirname '" out-file "')\""))
+                      (io/write-file out-file res2)))
+                  (recur (rest rem)))))))
         ; 3. Compile sources
         (let [src-dirs (or (:src-dirs dep-cfg) ["src/main"])
               cp-str   (str/trim (:stdout (shell/sh (str "ls '" abs-path "/libs'/*.jar 2>/dev/null | tr '\\n' ':' | sed 's/:$//'"))))
@@ -392,9 +409,19 @@
         (log/step "Running templates...")
         (loop [rem tpls]
           (if (empty? rem) nil
-            (let [tpl (first rem)]
-              (log/info (str "Processing template " tpl))
-              ;; Future templating logic goes here
+            (let [tpl (first rem)
+                  in-file (if (string? tpl) tpl (:in tpl))
+                  out-file (if (string? tpl) (str/replace tpl ".template" "") (:out tpl))]
+              (log/info (str "Processing template " in-file " -> " out-file))
+              (if (io/exists? in-file)
+                (let [content (io/read-file in-file)
+                      name (or (:name config) "unknown")
+                      version (or (:version config) "unknown")
+                      res1 (str/replace content "${name}" name)
+                      res2 (str/replace res1 "${version}" version)]
+                  (shell/sh (str "mkdir -p \"$(dirname '" out-file "')\""))
+                  (io/write-file out-file res2))
+                (log/warn (str "Template file not found: " in-file)))
               (recur (rest rem))))))
       nil)))
 
