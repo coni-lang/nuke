@@ -10,6 +10,7 @@
 (def nuke-commit-msg "DEV")
 
 
+
 (defprotocol Task
   (get-name [this])
   (get-deps [this])
@@ -38,6 +39,70 @@
   (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs"])
         targets-str (str/join " " clean-targets)]
     (shell/sh (str "rm -rf " targets-str))))
+
+; Build a local dependency jar entirely in-process (no external nuke subprocess).
+; Reads the dep's nuke.edn, downloads its Maven deps, recurses into its local deps,
+; compiles and packages — all using absolute paths.
+(defn build-dep-jar [abs-path]
+  (let [edn-file (str abs-path "/nuke.edn")
+        dep-cfg  (if (io/exists? edn-file)
+                   (edn/parse-edn (io/read-file edn-file))
+                   {})
+        dep-name    (or (:name dep-cfg) "lib")
+        dep-version (or (:version dep-cfg) "1.0.0")
+        jar-file    (str abs-path "/target/" dep-name "-" dep-version ".jar")]
+    ; Skip rebuild if the jar already exists and is up-to-date
+    (if (not (io/exists? jar-file))
+      (do
+        ; 1. Download Maven deps for this dep
+        (let [maven-deps (:dependencies dep-cfg)
+              repos (or (:repositories dep-cfg) ["https://repo1.maven.org/maven2"])]
+          (if maven-deps
+            (do
+              (shell/sh (str "mkdir -p '" abs-path "/libs'"))
+              (loop [rem maven-deps]
+                (if (not (empty? rem))
+                  (let [d (first rem)
+                        parts (str/split d ":")
+                        g (get parts 0) a (get parts 1) v (get parts 2)
+                        fname (str a "-" v ".jar")
+                        fpath (str abs-path "/libs/" fname)
+                        g-path (str/replace g "." "/")
+                        url (str (first repos) "/" g-path "/" a "/" v "/" fname)]
+                    (if (not (io/exists? fpath))
+                      (shell/sh (str "curl -L -s -o '" fpath "' " url)))
+                    (recur (rest rem))))))))
+        ; 2. Recurse into local deps of this dep
+        (let [sub-deps (:local-dependencies dep-cfg)]
+          (if sub-deps
+            (do
+              (shell/sh (str "mkdir -p '" abs-path "/libs'"))
+              (loop [rem sub-deps]
+                (if (not (empty? rem))
+                  (let [ldep (first rem)
+                        rel  (if (string? ldep) ldep (:path ldep))
+                        sub-abs (str/trim (:stdout (shell/sh (str "cd '" abs-path "/" rel "' && pwd"))))]
+                    (if rel
+                      (do
+                        (build-dep-jar sub-abs)
+                        (shell/sh (str "for j in " sub-abs "/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" '" abs-path "/libs/' 2>/dev/null || cp \"$j\" '" abs-path "/libs/'; }; done || true"))
+                        (shell/sh (str "for j in " sub-abs "/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" '" abs-path "/libs/' 2>/dev/null || cp \"$j\" '" abs-path "/libs/'; }; done || true"))))
+                    (recur (rest rem))))))))
+        ; 3. Compile sources
+        (let [src-dirs (or (:src-dirs dep-cfg) ["src/main"])
+              cp-str   (str/trim (:stdout (shell/sh (str "ls '" abs-path "/libs'/*.jar 2>/dev/null | tr '\\n' ':' | sed 's/:$//'"))))
+              src-args (loop [rem src-dirs acc ""]
+                         (if (empty? rem) acc
+                           (recur (rest rem) (str acc " '" abs-path "/" (first rem) "'"))))]
+          (shell/sh (str "mkdir -p '" abs-path "/classes'"))
+          (shell/sh (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"javac -d '" abs-path "/classes'"
+                         (if (not (= cp-str "")) (str " -cp \"" cp-str "\"") "")
+                         " $(find" src-args " -name '*.java' 2>/dev/null | tr '\\n' ' ')")))
+        ; 4. Package jar
+        (shell/sh (str "mkdir -p '" abs-path "/std-classes' '" abs-path "/target'"))
+        (shell/sh (str "cp -r '" abs-path "/classes/.' '" abs-path "/std-classes/' 2>/dev/null || true"))
+        (shell/sh (str "printf 'Manifest-Version: 1.0\\nMain-Class: " (or (:main-class dep-cfg) "Main") "\\n' > '" abs-path "/Manifest.txt'"))
+        (shell/sh (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"jar cfm '" jar-file "' '" abs-path "/Manifest.txt' -C '" abs-path "/std-classes' ."))))))
 
 (defn exec-download-deps [config]
   (let [repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
@@ -73,18 +138,12 @@
               (if lpath
                 (do
                   (log/info (str "Resolving local dependency at " lpath "..."))
-                  (let [res (shell/sh (str "cd " lpath " && \"${NUKE_BIN:-nuke}\" jar"))]
-                    (if (not (= 0 (:code res)))
-                      (do
-                        (log/error (str "Failed to build local dependency at " lpath))
-                        (println (:stderr res))
-                        (sys-exit 1))
-                      (do
-                        (log/info (str "Linking/Copying local dependency jar from " lpath "..."))
-                        (shell/sh (str "for j in $(cd " lpath " && pwd)/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
-                        (shell/sh (str "for j in $(cd " lpath " && pwd)/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
-                        (shell/sh (str "for sub in $(cd " lpath " && pwd)/libs/*.jar; do dep_libs=\"$(dirname \"$(readlink \"$sub\" 2>/dev/null || echo \"$sub\")\")/../libs\"; dep_libs=\"$(cd \"$dep_libs\" 2>/dev/null && pwd)\"; if [ -d \"$dep_libs\" ]; then for j in \"$dep_libs\"/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done; fi; done || true")))))))
-              (recur (rest rem)))))))))
+                  (let [abs-path (str/trim (:stdout (shell/sh (str "cd " lpath " && pwd"))))]
+                    (build-dep-jar abs-path)
+                    (log/info (str "Linking/Copying local dependency jar from " lpath "..."))
+                    (shell/sh (str "for j in " abs-path "/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
+                    (shell/sh (str "for j in " abs-path "/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))))
+              (recur (rest rem))))))))))
 
 (defn get-java-bin [config bin-name]
   (let [conf-home (:java-home config)]
