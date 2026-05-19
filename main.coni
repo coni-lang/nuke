@@ -101,6 +101,8 @@
         ; 4. Package jar
         (shell/sh (str "mkdir -p '" abs-path "/std-classes' '" abs-path "/target'"))
         (shell/sh (str "cp -r '" abs-path "/classes/.' '" abs-path "/std-classes/' 2>/dev/null || true"))
+        (let [res-dir (or (:resource-dir dep-cfg) (str abs-path "/src/main/resources"))]
+          (shell/sh (str "if [ -d '" res-dir "' ]; then cp -R '" res-dir "/.' '" abs-path "/std-classes/'; fi")))
         (shell/sh (str "printf 'Manifest-Version: 1.0\\nMain-Class: " (or (:main-class dep-cfg) "Main") "\\n' > '" abs-path "/Manifest.txt'"))
         (shell/sh (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"jar cfm '" jar-file "' '" abs-path "/Manifest.txt' -C '" abs-path "/std-classes' ."))))))
 
@@ -129,21 +131,21 @@
               (recur (rest rem))))))))
   (let [local-deps (:local-dependencies config)]
     (if local-deps
-      (do
-        (shell/sh "mkdir -p libs")
-        (loop [rem local-deps]
-          (if (not (empty? rem))
-            (let [ldep (first rem)
+      (loop [rem local-deps]
+        (if (not (empty? rem))
+          (do
+            (shell/sh "mkdir -p libs")
+            (let [ldep  (first rem)
                   lpath (if (string? ldep) ldep (:path ldep))]
               (if lpath
-                (do
+                (let [abs-path (str/trim (:stdout (shell/sh (str "cd " lpath " && pwd"))))]
                   (log/info (str "Resolving local dependency at " lpath "..."))
-                  (let [abs-path (str/trim (:stdout (shell/sh (str "cd " lpath " && pwd"))))]
-                    (build-dep-jar abs-path)
-                    (log/info (str "Linking/Copying local dependency jar from " lpath "..."))
-                    (shell/sh (str "for j in " abs-path "/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
-                    (shell/sh (str "for j in " abs-path "/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))))
-              (recur (rest rem))))))))))
+                  (build-dep-jar abs-path)
+                  (log/info (str "Linking/Copying local dependency jar from " lpath "..."))
+                  (shell/sh (str "for j in " abs-path "/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
+                  (shell/sh (str "for j in " abs-path "/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true")))))
+            (recur (rest rem))))))))
+
 
 (defn get-java-bin [config bin-name]
   (let [conf-home (:java-home config)]
