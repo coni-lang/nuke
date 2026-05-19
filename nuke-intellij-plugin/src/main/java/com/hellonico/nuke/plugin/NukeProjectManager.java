@@ -216,14 +216,11 @@ public class NukeProjectManager {
                 Module depModule = entry.getValue();
                 ModuleRootModificationUtil.updateModel(depModule, depModel -> {
                     depModel.inheritSdk();
-                    ContentEntry ce = null;
                     for (ContentEntry e : depModel.getContentEntries()) {
-                        if (e.getUrl().equals(VfsUtil.pathToUrl(depDir.getAbsolutePath()))) { ce = e; break; }
+                        depModel.removeContentEntry(e);
                     }
-                    if (ce == null) {
-                        VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath());
-                        ce = root != null ? depModel.addContentEntry(root) : depModel.addContentEntry(VfsUtil.pathToUrl(depDir.getAbsolutePath()));
-                    }
+                    VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath());
+                    ContentEntry ce = root != null ? depModel.addContentEntry(root) : depModel.addContentEntry(VfsUtil.pathToUrl(depDir.getAbsolutePath()));
                     ce.clearSourceFolders();
                     java.util.List<String> srcDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":src-dirs");
                     if (srcDirs.isEmpty()) srcDirs.add("src/main");
@@ -270,14 +267,11 @@ public class NukeProjectManager {
                 for (String url : jarUrls) libModel.addRoot(url, OrderRootType.CLASSES);
                 libModel.commit();
 
-                ContentEntry entry = null;
                 for (ContentEntry e : model.getContentEntries()) {
-                    if (e.getUrl().equals(VfsUtil.pathToUrl(basePath))) { entry = e; break; }
+                    model.removeContentEntry(e);
                 }
-                if (entry == null) {
-                    VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath);
-                    entry = root != null ? model.addContentEntry(root) : model.addContentEntry(VfsUtil.pathToUrl(basePath));
-                }
+                VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath);
+                ContentEntry entry = root != null ? model.addContentEntry(root) : model.addContentEntry(VfsUtil.pathToUrl(basePath));
                 entry.clearSourceFolders();
                 java.util.List<String> srcDirs = parseArray(basePath + "/nuke.edn", ":src-dirs");
                 if (srcDirs.isEmpty()) srcDirs.add("src/main");
