@@ -1,0 +1,34 @@
+;; Generate a Dockerfile (if not already present) then build the Docker image.
+;; Reads :name, :version, and :main-class from nuke.edn via @global-task-config.
+
+(let [config      @global-task-config
+      app-name    (or (:name config) "app")
+      app-version (or (:version config) "1.0.0")
+      main-class  (or (:main-class config) "Main")
+      jar-file    (str app-name "-" app-version "-uberjar.jar")
+      image-tag   (str app-name ":" app-version)]
+
+  ;; -- Generate Dockerfile if missing --
+  (if (io/exists? "Dockerfile")
+    (println "Dockerfile already exists, skipping generation.")
+    (do
+      (println "Generating Dockerfile...")
+      (io/write-file "Dockerfile"
+        (str
+          "FROM eclipse-temurin:21-jre-alpine\n"
+          "WORKDIR /app\n"
+          "COPY target/" jar-file " app.jar\n"
+          "EXPOSE 8080\n"
+          "ENTRYPOINT [\"java\", \"-jar\", \"app.jar\"]\n"))
+      (println "Dockerfile written.")))
+
+  ;; -- Build the Docker image --
+  (println (str "Building image " image-tag "..."))
+  (let [res (shell/sh (str "docker build -t " image-tag " ."))]
+    (if (= 0 (:code res))
+      (do
+        (println (:stdout res))
+        (println (str "Image built: " image-tag)))
+      (do
+        (println "Docker build failed:")
+        (println (:stderr res))))))

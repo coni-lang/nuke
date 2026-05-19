@@ -1,0 +1,15 @@
+;; Parse the test report and print a summary
+(let [report-path "target/test-report.txt"]
+  (if (io/exists? report-path)
+    (let [report  (io/read-file report-path)
+          lines   (str/split report "\n")
+          ok-line (first (filter (fn [l] (str/includes? l "OK")) lines))
+          err-line (first (filter (fn [l] (str/includes? l "FAILURES")) lines))]
+      (println "\n=== Test Report Summary ===")
+      (if ok-line
+        (println (str "✅ " ok-line))
+        (if err-line
+          (println (str "❌ " err-line))
+          (println "⚠️  Could not determine test result.")))
+      (println (str "Full report: " report-path)))
+    (println "⚠️  No test report found at target/test-report.txt — run 'nuke test' first.")))

@@ -1,0 +1,67 @@
+{:name "custom-plugins-example"
+ :version "1.0.0"
+ :main-class "com.example.Main"
+ :src-dir "src/main"
+
+ :tasks
+ {;; -- Developer Utility Plugins --
+
+  :sloc        {:desc "Count lines of Java source code"
+                :cmds ["find src/main -name '*.java' | xargs wc -l | tail -1"]}
+
+  :dep-audit   {:desc "List all downloaded dependency jars"
+                :cmds ["echo '=== Dependencies in libs/ ==='"
+                       "ls -lh libs/*.jar 2>/dev/null || echo 'No deps downloaded yet'"]}
+
+  :lint        {:desc "Lint Java sources with Checkstyle (auto-downloads if missing)"
+                :deps [:compile]
+                :coni "scripts/lint.coni"}
+
+  :format      {:desc "Format Java sources with google-java-format (requires jar in libs/)"
+                :cmds ["find src/main -name '*.java' | xargs java -jar libs/google-java-format.jar --replace 2>/dev/null || echo '[format] google-java-format jar not found, skipping'"]}
+
+  ;; -- Release & Packaging Plugins --
+
+  :changelog   {:desc "Generate CHANGELOG.md from the last 20 git commits"
+                :cmds ["git log --oneline --no-merges -20 > CHANGELOG.md"
+                       "echo 'Changelog written to CHANGELOG.md'"]}
+
+  :bump        {:desc "Bump the patch version number in nuke.edn"
+                :coni "scripts/bump_version.coni"}
+
+  :docker      {:desc "Generate Dockerfile from config and build the Docker image"
+                :deps [:uberjar]
+                :coni "scripts/docker_build.coni"}
+
+  ;; -- Deployment Plugins --
+
+  :deploy-ssh  {:desc "SCP uberjar to a remote server (edit host/path before use)"
+                :deps [:uberjar]
+                :cmds ["echo '[deploy-ssh] Would run: scp target/*.jar user@prod:/opt/myapp/app.jar'"
+                       "echo '[deploy-ssh] Would run: ssh user@prod systemctl restart myapp'"
+                       "echo '[deploy-ssh] dry-run mode - configure host in nuke.edn before real use'"]}
+
+  :github-release {:desc "Create a GitHub release with the uberjar (requires gh CLI)"
+                   :deps [:uberjar]
+                   :cmds ["gh release create v1.0.0 target/*.jar --title 'v1.0.0' --notes 'Automated release via Nuke' 2>/dev/null || echo '[github-release] gh CLI not found or not authenticated'"]}
+
+  ;; -- Reporting Plugins --
+
+  :report      {:desc "Show a test summary after running tests"
+                :deps [:test]
+                :coni "scripts/coverage_report.coni"}
+
+  ;; -- Workflow Orchestration --
+
+  :ci          {:desc "Full CI pipeline: clean, compile, test, jar"
+                :deps [:clean :test :jar]
+                :cmds ["echo 'CI pipeline complete!'"]}
+
+  :install-hooks {:desc "Install a git pre-commit hook that runs lint before each commit"
+                  :cmds ["mkdir -p .git/hooks"
+                         "printf '#!/bin/sh\\nnuke lint\\n' > .git/hooks/pre-commit"
+                         "chmod +x .git/hooks/pre-commit"
+                         "echo 'Pre-commit hook installed at .git/hooks/pre-commit'"]}
+
+  :watch       {:desc "Watch src/ and recompile on change (requires fswatch)"
+                :cmds ["fswatch -o src/main | xargs -n1 -I{} nuke compile 2>/dev/null || echo '[watch] fswatch not found. Install with: brew install fswatch'"]}}}
