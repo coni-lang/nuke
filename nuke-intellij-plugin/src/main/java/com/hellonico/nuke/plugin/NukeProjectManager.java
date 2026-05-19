@@ -236,6 +236,12 @@ public class NukeProjectManager {
                     }
                     VirtualFile resources = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/src/main/resources");
                     if (resources != null) ce.addSourceFolder(resources, JavaResourceRootType.RESOURCE);
+                    CompilerModuleExtension compilerExtension = depModel.getModuleExtension(CompilerModuleExtension.class);
+                    if (compilerExtension != null) {
+                        compilerExtension.inheritCompilerOutputPath(false);
+                        compilerExtension.setCompilerOutputPath(VfsUtil.pathToUrl(depDir.getAbsolutePath() + "/build/classes/java/main"));
+                        compilerExtension.setCompilerOutputPathForTests(VfsUtil.pathToUrl(depDir.getAbsolutePath() + "/build/classes/java/test"));
+                    }
                 });
                 ModuleRootModificationUtil.addDependency(rootModule, depModule);
             }
