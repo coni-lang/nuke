@@ -82,7 +82,8 @@
                       (do
                         (log/info (str "Linking/Copying local dependency jar from " lpath "..."))
                         (shell/sh (str "for j in $(cd " lpath " && pwd)/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
-                        (shell/sh (str "for j in $(cd " lpath " && pwd)/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true")))))))
+                        (shell/sh (str "for j in $(cd " lpath " && pwd)/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
+                        (shell/sh (str "for sub in $(cd " lpath " && pwd)/libs/*.jar; do dep_libs=\"$(dirname \"$(readlink \"$sub\" 2>/dev/null || echo \"$sub\")\")/../libs\"; dep_libs=\"$(cd \"$dep_libs\" 2>/dev/null && pwd)\"; if [ -d \"$dep_libs\" ]; then for j in \"$dep_libs\"/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done; fi; done || true")))))))
               (recur (rest rem)))))))))
 
 (defn get-java-bin [config bin-name]

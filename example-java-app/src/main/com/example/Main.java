@@ -6,7 +6,9 @@ import java.util.Properties;
 public class Main {
     public static void main(String[] args) {
         System.out.println("Result: " + MathLib.multiplyAndAdd(5, 3, 2));
-        
+        System.out.println("5! = " + AdvancedMath.factorial(5));
+        System.out.println("mean(1,2,3,4,5) = " + AdvancedMath.mean(1, 2, 3, 4, 5));
+
         try (InputStream input = Main.class.getClassLoader().getResourceAsStream("config.properties")) {
             if (input == null) {
                 System.out.println("Sorry, unable to find config.properties");
