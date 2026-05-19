@@ -28,3 +28,5 @@ example-java-uberjar/nuke
 example-java-standard/nuke
 nuke-mac
 nuke-linux
+nuke.exe
+nuke-intellij-plugin/src/main/resources/bin/

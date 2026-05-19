@@ -46,6 +46,7 @@ public class NukeToolWindowFactory implements ToolWindowFactory {
         DefaultActionGroup actionGroup = new DefaultActionGroup();
         actionGroup.add(new NukeSyncAction());
         actionGroup.add(new NukeImportGradleAction());
+        actionGroup.add(new NukeImportPomAction());
         ActionToolbar toolbar = ActionManager.getInstance().createActionToolbar("NukeToolbar", actionGroup, true);
         toolbar.setTargetComponent(panel);
         panel.add(toolbar.getComponent(), BorderLayout.NORTH);

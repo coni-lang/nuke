@@ -8,6 +8,7 @@ Nuke is a fast, lightweight, and extensible build tool for Java projects, config
 - **Built-in Tasks**: Standard build lifecycle out of the box (`clean`, `compile`, `test`, `run`, `jar`, `uberjar`, `zip`, `upload`, `build`).
 - **Custom Tasks**: Easily define custom tasks in `nuke.edn` that can execute bash commands, run Coni scripts, or extend existing built-in tasks.
 - **IDE Support**: Comes with an IntelliJ IDEA plugin for seamless integration, task execution, and classpath synchronization.
+- **Native Templating**: Inject build variables into source files automatically via the `:templates` configuration.
 - **No Boilerplate**: No XML, no verbose Gradle scripts—just a minimal EDN map.
 
 ## Installation
@@ -45,6 +46,7 @@ The build configuration is stored in `nuke.edn` in the root of your project.
  :main-class "com.example.Main"
  :javac-opts ["-parameters"]
  :encoding "UTF-8"
+ :templates ["src/main/resources/config.txt.template"]
  :tasks {:custom-jar {:extends "jar"
                       :jar-name "out/my-app-custom.jar"
                       :desc "Creates a standard jar directly after compile, with a custom name"}
@@ -62,6 +64,7 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:repositories` - List of Maven repository URLs.
 - `:dependencies` - List of Maven coordinates in the format `"group:artifact:version"`.
 - `:local-dependencies` - List of local Nuke projects to build and link.
+- `:templates` - List of template files to process (variables like `${name}` and `${version}` will be replaced, and the `.template` extension will be stripped from the output).
 - `:main-class` - Fully qualified class name to execute with `nuke run` or to embed in Jar manifests.
 - `:java-home` - Optional override for `$JAVA_HOME`.
 - `:src-dir` - Source directory (default: `src/main`).
@@ -105,6 +108,7 @@ Nuke provides a dedicated IntelliJ IDEA plugin. You can install it from the `nuk
 - Features a **Nuke Build** tool window.
 - Allows 1-click execution of any Nuke task.
 - Adds "Sync Nuke Project" action to download dependencies and configure your module classpath automatically.
+- Import dependencies automatically from existing `build.gradle` or `pom.xml` files directly from the tool window.
 - Provides syntax highlighting and language support for `.edn` and `.coni` files.
 
 ## Under the Hood
