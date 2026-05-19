@@ -163,12 +163,17 @@ public class NukeProjectManager {
         ApplicationManager.getApplication().runWriteAction(() -> {
             // Ensure root module exists
             Module[] modules = ModuleManager.getInstance(project).getModules();
-            Module rootModule;
+            Module rootModule = null;
             com.intellij.openapi.module.ModifiableModuleModel moduleModel = ModuleManager.getInstance(project).getModifiableModel();
-            if (modules.length == 0) {
-                rootModule = moduleModel.newModule(basePath + "/" + project.getName() + ".iml", "JAVA_MODULE");
-            } else {
-                rootModule = modules[0];
+            String expectedRootName = project.getName();
+            for (Module m : modules) {
+                if (m.getName().equals(expectedRootName)) {
+                    rootModule = m;
+                    break;
+                }
+            }
+            if (rootModule == null) {
+                rootModule = moduleModel.newModule(basePath + "/" + expectedRootName + ".iml", "JAVA_MODULE");
             }
 
             // Create all dep modules that don't exist yet
