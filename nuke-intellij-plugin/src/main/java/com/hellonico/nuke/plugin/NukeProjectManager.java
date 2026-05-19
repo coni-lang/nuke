@@ -210,12 +210,38 @@ public class NukeProjectManager {
             }
             pruneModel.commit();
 
+            // --- Phase 2.5: configure third party jars (excluding local project jars) ---
+            File libsDir = new File(basePath, "libs");
+            List<String> jarUrls = new ArrayList<>();
+            if (libsDir.exists() && libsDir.isDirectory()) {
+                File[] libFiles = libsDir.listFiles();
+                if (libFiles != null) {
+                    for (File f : libFiles) {
+                        if (!f.getName().endsWith(".jar")) continue;
+                        boolean isLocal = false;
+                        for (String lpn : localProjectNames) {
+                            if (f.getName().startsWith(lpn + "-")) { isLocal = true; break; }
+                        }
+                        if (!isLocal) jarUrls.add(VfsUtil.getUrlForLibraryRoot(f));
+                    }
+                }
+            }
+
             // --- Phase 3: configure content roots and add module dependencies ---
             for (java.util.Map.Entry<File, Module> entry : depModuleMap.entrySet()) {
                 File depDir = entry.getKey();
                 Module depModule = entry.getValue();
                 ModuleRootModificationUtil.updateModel(depModule, depModel -> {
                     depModel.inheritSdk();
+                    
+                    LibraryTable table = depModel.getModuleLibraryTable();
+                    Library library = table.getLibraryByName("NukeDeps");
+                    if (library != null) table.removeLibrary(library);
+                    library = table.createLibrary("NukeDeps");
+                    Library.ModifiableModel libModel = library.getModifiableModel();
+                    for (String url : jarUrls) libModel.addRoot(url, OrderRootType.CLASSES);
+                    libModel.commit();
+
                     for (ContentEntry e : depModel.getContentEntries()) {
                         depModel.removeContentEntry(e);
                     }
@@ -246,23 +272,7 @@ public class NukeProjectManager {
                 ModuleRootModificationUtil.addDependency(rootModule, depModule);
             }
 
-            // --- Phase 4: configure root module jars (excluding local project jars) ---
-            File libsDir = new File(basePath, "libs");
-            List<String> jarUrls = new ArrayList<>();
-            if (libsDir.exists() && libsDir.isDirectory()) {
-                File[] libFiles = libsDir.listFiles();
-                if (libFiles != null) {
-                    for (File f : libFiles) {
-                        if (!f.getName().endsWith(".jar")) continue;
-                        boolean isLocal = false;
-                        for (String lpn : localProjectNames) {
-                            if (f.getName().startsWith(lpn + "-")) { isLocal = true; break; }
-                        }
-                        if (!isLocal) jarUrls.add(VfsUtil.getUrlForLibraryRoot(f));
-                    }
-                }
-            }
-
+            // --- Phase 4: configure root module jars ---
             ModuleRootModificationUtil.updateModel(rootModule, model -> {
                 model.inheritSdk();
                 LibraryTable table = model.getModuleLibraryTable();
