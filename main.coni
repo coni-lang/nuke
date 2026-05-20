@@ -27,20 +27,125 @@
     (if (empty? rem) acc
       (recur (rest rem) (conj acc (first rem))))))
 
+#[cfg(windows)]
+(def classpath-separator ";")
+
+#[cfg(not(windows))]
+(def classpath-separator ":")
+
+(defn mkdir-p [dir-path]
+  (loop [p dir-path]
+    (if (not (io/exists? p))
+      (let [gp (io/parent-dir p)]
+        (if (and (not= gp "") (not= gp p))
+          (recur gp))
+        (sys-file-mkdir p)))))
+
+#[cfg(windows)]
+(defn get-pwd []
+  (let [res (shell/sh "cmd /c cd")]
+    (str/trim (:stdout res))))
+
+#[cfg(not(windows))]
+(defn get-pwd []
+  (let [res (shell/sh "pwd")]
+    (str/trim (:stdout res))))
+
+#[cfg(windows)]
+(defn link-or-copy-jars [src-dir dest-dir]
+  (if (io/exists? src-dir)
+    (let [entries (io/read-dir src-dir)]
+      (loop [rem entries]
+        (if (not (empty? rem))
+          (let [entry (first rem)]
+            (if (str/ends-with? entry ".jar")
+              (io/copy (str src-dir "/" entry) (str dest-dir "/" entry)))
+            (recur (rest rem))))))))
+
+#[cfg(not(windows))]
+(defn link-or-copy-jars [src-dir dest-dir]
+  (shell/sh (str "for j in " src-dir "/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" '" dest-dir "/' 2>/dev/null || cp \"$j\" '" dest-dir "/'; }; done || true")))
+
+#[cfg(windows)]
+(defn unzip-file [jar-path dest-dir]
+  (let [win-jar (str/replace jar-path "/" "\\")
+        win-dest (str/replace dest-dir "/" "\\")
+        cmd (str "powershell -Command \"Expand-Archive -Path '" win-jar "' -DestinationPath '" win-dest "' -Force\"")
+        res (shell/sh cmd)]
+    (= 0 (:code res))))
+
+#[cfg(not(windows))]
+(defn unzip-file [jar-path dest-dir]
+  (let [res (shell/sh (str "unzip -q -o '" jar-path "' -d " dest-dir "/ 2>/dev/null || true"))]
+    (= 0 (:code res))))
+
+#[cfg(windows)]
+(defn zip-archive [zip-name includes-list]
+  (let [win-zip (str/replace zip-name "/" "\\")
+        paths (loop [rem includes-list acc []]
+                (if (empty? rem) acc
+                  (recur (rest rem) (conj acc (str "'" (str/replace (first rem) "/" "\\") "'")))))
+        paths-str (str/join "," paths)
+        cmd (str "powershell -Command \"Compress-Archive -Path " paths-str " -DestinationPath '" win-zip "' -Force\"")
+        res (shell/sh cmd)]
+    (= 0 (:code res))))
+
+#[cfg(not(windows))]
+(defn zip-archive [zip-name includes-list]
+  (let [includes-str (str/join " " includes-list)
+        cmd (str "zip -q -r '" zip-name "' " includes-str)
+        res (shell/sh cmd)]
+    (= 0 (:code res))))
+
+(defn get-default-zip-files []
+  (if (io/exists? "target")
+    (let [files (io/read-dir "target")]
+      (loop [rem files acc []]
+        (if (empty? rem) acc
+          (let [f (first rem)]
+            (if (or (str/ends-with? f ".jar") (str/ends-with? f ".txt") (str/ends-with? f ".pom"))
+              (recur (rest rem) (conj acc (str "target/" f)))
+              (recur (rest rem) acc))))))
+    []))
+
+(defn any-file-newer? [dir reference-file]
+  (let [ref-time (sys-file-modtime reference-file)
+        files (io/file-seq dir)]
+    (loop [rem files]
+      (if (empty? rem)
+        false
+        (let [f (first rem)]
+          (if (and (io/file? f) (> (sys-file-modtime f) ref-time))
+            true
+            (recur (rest rem))))))))
+
+(defn find-test-classes [test-dir]
+  (let [files (io/file-seq test-dir)
+        test-files (filter (fn [f] (and (str/ends-with? f "Test.java") (io/file? f))) files)
+        prefix (if (str/ends-with? test-dir "/") test-dir (str test-dir "/"))]
+    (loop [rem test-files acc []]
+      (if (empty? rem)
+        (str/join "\n" acc)
+        (let [f (first rem)
+              rel (if (str/starts-with? f prefix) (str/substring f (count prefix) (count f)) f)
+              no-ext (str/substring rel 0 (- (count rel) 5))
+              class-name (str/replace (str/replace no-ext "/" ".") "\\" ".")]
+          (recur (rest rem) (conj acc class-name)))))))
+
 (defn find-java-files [dir]
-  (let [res (shell/sh (str "find " dir " -name \"*.java\""))]
-    (if (= 0 (:code res))
-      (let [files (str/split (str/trim (:stdout res)) "\n")]
-        (to-vec (filter (fn [x] (not (empty? x))) files)))
-      [])))
+  (if (io/exists? dir)
+    (let [all-files (io/file-seq dir)]
+      (to-vec (filter (fn [f] (and (str/ends-with? f ".java") (io/file? f))) all-files)))
+    []))
 
 ;; Task Implementations
 (defn clean-project [abs-path config]
-  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs"])
-        targets-str (loop [rem clean-targets acc ""]
-                      (if (empty? rem) acc
-                        (recur (rest rem) (str acc " '" abs-path "/" (first rem) "'"))))]
-    (shell/sh (str "rm -rf" targets-str))
+  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs"])]
+    (loop [rem clean-targets]
+      (if (not (empty? rem))
+        (let [t (first rem)]
+          (io/delete-file (str abs-path "/" t))
+          (recur (rest rem)))))
     
     (let [tpls (:templates config)]
       (if tpls
@@ -48,7 +153,7 @@
           (if (not (empty? rem))
             (let [tpl (first rem)
                   out-file (if (string? tpl) (str/replace tpl ".template" "") (:out tpl))]
-              (shell/sh (str "rm -f '" abs-path "/" out-file "'"))
+              (io/delete-file (str abs-path "/" out-file))
               (recur (rest rem)))))))
               
     (let [local-deps (:local-dependencies config)]
@@ -58,7 +163,7 @@
             (let [ldep (first rem)
                   lpath (if (string? ldep) ldep (:path ldep))]
               (if lpath
-                (let [sub-abs (str/trim (:stdout (shell/sh (str "cd '" abs-path "/" lpath "' && pwd"))))
+                (let [sub-abs (str abs-path "/" lpath)
                       edn-file (str sub-abs "/nuke.edn")
                       sub-cfg (if (io/exists? edn-file) (edn/parse-edn (io/read-file edn-file)) {})]
                   (clean-project sub-abs sub-cfg)))
@@ -66,7 +171,7 @@
 
 (defn exec-clean [config]
   (log/step "Cleaning build directories...")
-  (let [pwd (str/trim (:stdout (shell/sh "pwd")))]
+  (let [pwd (get-pwd)]
     (clean-project pwd config)))
 
 ; Build a local dependency jar entirely in-process (no external nuke subprocess).
@@ -92,17 +197,17 @@
         (let [sub-deps (:local-dependencies dep-cfg)]
           (if sub-deps
             (do
-              (shell/sh (str "mkdir -p '" abs-path "/libs'"))
+              (mkdir-p (str abs-path "/libs"))
               (loop [rem sub-deps]
                 (if (not (empty? rem))
                   (let [ldep (first rem)
                         rel  (if (string? ldep) ldep (:path ldep))
-                        sub-abs (str/trim (:stdout (shell/sh (str "cd '" abs-path "/" rel "' && pwd"))))]
+                        sub-abs (str abs-path "/" rel)]
                     (if rel
                       (do
                         (build-dep-jar sub-abs)
-                        (shell/sh (str "for j in " sub-abs "/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" '" abs-path "/libs/' 2>/dev/null || cp \"$j\" '" abs-path "/libs/'; }; done || true"))
-                        (shell/sh (str "for j in " sub-abs "/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" '" abs-path "/libs/' 2>/dev/null || cp \"$j\" '" abs-path "/libs/'; }; done || true"))))
+                        (link-or-copy-jars (str sub-abs "/target") (str abs-path "/libs"))
+                        (link-or-copy-jars (str sub-abs "/libs") (str abs-path "/libs"))))
                     (recur (rest rem))))))))
         ; 2.5 Process templates
         (let [tpls (:templates dep-cfg)]
@@ -118,26 +223,48 @@
                           version (or (:version dep-cfg) "unknown")
                           res1 (str/replace content "${name}" name)
                           res2 (str/replace res1 "${version}" version)]
-                      (shell/sh (str "mkdir -p \"$(dirname '" out-file "')\""))
+                      (io/make-parents out-file)
                       (io/write-file out-file res2)))
                   (recur (rest rem)))))))
         ; 3. Compile sources
         (let [src-dirs (or (:src-dirs dep-cfg) (if (io/exists? (str abs-path "/src/main/java")) ["src/main/java"] ["src/main"]))
               cp-str   (get-classpath-jars dep-cfg abs-path)
-              src-args (loop [rem src-dirs acc ""]
-                         (if (empty? rem) acc
-                           (recur (rest rem) (str acc " '" abs-path "/" (first rem) "'"))))]
-          (shell/sh (str "mkdir -p '" abs-path "/classes'"))
-          (shell/sh (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"javac -d '" abs-path "/classes'"
-                         (if (not (= cp-str "")) (str " -cp \"" cp-str "\"") "")
-                         " $(find" src-args " -name '*.java' 2>/dev/null | tr '\\n' ' ')")))
+              cp-arg   (if (not (= cp-str "")) (str " -cp \"" cp-str "\"") "")
+              java-files (loop [rem src-dirs acc []]
+                           (if (empty? rem) acc
+                             (recur (rest rem) (concat acc (find-java-files (str abs-path "/" (first rem)))))))
+              files-arg (str/join " " java-files)]
+          (mkdir-p (str abs-path "/classes"))
+          (if (> (count java-files) 0)
+            (let [cmd (str (get-java-bin dep-cfg "javac") " -d \"" abs-path "/classes\" " cp-arg " " files-arg)
+                  res (shell/sh cmd)]
+              (if (not (= 0 (:code res)))
+                (do
+                  (log/error (str "Dependency compilation failed for: " dep-name))
+                  (println (:stderr res))
+                  (sys-exit 1))))))
         ; 4. Package jar
-        (shell/sh (str "mkdir -p '" abs-path "/std-classes' '" abs-path "/target'"))
-        (shell/sh (str "cp -r '" abs-path "/classes/.' '" abs-path "/std-classes/' 2>/dev/null || true"))
+        (mkdir-p (str abs-path "/std-classes"))
+        (mkdir-p (str abs-path "/target"))
+        (if (io/exists? (str abs-path "/classes"))
+          (io/copy-dir (str abs-path "/classes") (str abs-path "/std-classes")))
         (let [res-dir (or (:resource-dir dep-cfg) (str abs-path "/src/main/resources"))]
-          (shell/sh (str "if [ -d '" res-dir "' ]; then cp -R '" res-dir "/.' '" abs-path "/std-classes/'; fi")))
-        (shell/sh (str "printf 'Manifest-Version: 1.0\\nMain-Class: " (or (:main-class dep-cfg) "Main") "\\n' > '" abs-path "/Manifest.txt'"))
-        (shell/sh (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"jar cfm '" jar-file "' '" abs-path "/Manifest.txt' -C '" abs-path "/std-classes' ."))))))
+          (if (io/exists? res-dir)
+            (io/copy-dir res-dir (str abs-path "/std-classes"))))
+        (io/write-file (str abs-path "/Manifest.txt") (str "Manifest-Version: 1.0\nMain-Class: " (or (:main-class dep-cfg) "Main") "\n"))
+        (let [cmd (str (get-java-bin dep-cfg "jar") " cfm \"" jar-file "\" \"" abs-path "/Manifest.txt\" -C \"" abs-path "/std-classes\" .")
+              res (shell/sh cmd)]
+          (if (not (= 0 (:code res)))
+            (do
+              (log/error (str "Dependency jar packaging failed for: " dep-name))
+              (println (:stderr res))
+              (sys-exit 1))))))))
+
+(defn copy-dir-contents [src dest]
+  (if (io/exists? src)
+    (if (= (sys-os-name) "windows")
+      (shell/sh (str "xcopy /E /I /Y \"" (str/replace src "/" "\\") "\" \"" (str/replace dest "/" "\\") "\""))
+      (shell/sh (str "cp -r \"" src "/.\" \"" dest "/\" 2>/dev/null || cp -R \"" src "\" \"" dest "\"")))))
 
 (defn exec-download-deps [config]
   (let [repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
@@ -152,16 +279,16 @@
       (loop [rem local-deps]
         (if (not (empty? rem))
           (do
-            (shell/sh "mkdir -p libs")
+            (mkdir-p "libs")
             (let [ldep  (first rem)
                   lpath (if (string? ldep) ldep (:path ldep))]
               (if lpath
-                (let [abs-path (str/trim (:stdout (shell/sh (str "cd " lpath " && pwd"))))]
+                (let [abs-path (str (get-pwd) "/" lpath)]
                   (log/info (str "Resolving local dependency at " lpath "..."))
                   (build-dep-jar abs-path)
                   (log/info (str "Linking/Copying local dependency jar from " lpath "..."))
-                  (shell/sh (str "for j in " abs-path "/target/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true"))
-                  (shell/sh (str "for j in " abs-path "/libs/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" libs/ 2>/dev/null || cp \"$j\" libs/; }; done || true")))))
+                  (link-or-copy-jars (str abs-path "/target") "libs")
+                  (link-or-copy-jars (str abs-path "/libs") "libs"))))
             (recur (rest rem))))))))
 
 
@@ -173,27 +300,26 @@
 
 (defn get-classpath-jars [config base-path]
   (let [libs-dir (if (= base-path ".") "libs" (str base-path "/libs"))
-        local-jars (let [res (shell/sh (str "find '" libs-dir "' -name \"*.jar\" 2>/dev/null"))]
-                     (if (= 0 (:code res))
-                       (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))
-                       []))
+        local-jars (if (io/exists? libs-dir)
+                     (let [all-files (io/file-seq libs-dir)]
+                       (filter (fn [f] (and (str/ends-with? f ".jar") (io/file? f))) all-files))
+                     [])
         maven-jars (if (:dependencies config)
                      (maven/resolve-deps (:dependencies config) (or (:repositories config) ["https://repo1.maven.org/maven2"]))
                      [])]
     (loop [rem maven-jars acc (to-vec local-jars)]
       (if (empty? rem)
-        (str/join ":" acc)
+        (str/join classpath-separator acc)
         (recur (rest rem) (conj acc (first rem)))))))
 
 (defn exec-classpath [config]
   (println (get-classpath-jars config ".")))
 
 (defn exec-compile [config]
-  (shell/sh "mkdir -p classes")
+  (mkdir-p "classes")
   (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
-        check-res (shell/sh (str "find " src-dir " -name '*.java' -newer classes/.last_compile 2>/dev/null | head -n 1"))
         needs-compile (or (not (io/exists? "classes/.last_compile")) 
-                          (> (count (str/trim (:stdout check-res))) 0))]
+                          (any-file-newer? src-dir "classes/.last_compile"))]
     (if needs-compile
       (let [java-files (find-java-files src-dir)]
         (if (> (count java-files) 0)
@@ -212,28 +338,29 @@
                     (log/error "Compilation failed!")
                     (println (:stderr res))
                     (sys-exit 1))
-                  (shell/sh "touch classes/.last_compile")))))
+                  (io/write-file "classes/.last_compile" "")))))
           (log/warn "No java files found. Skipping compilation.")))
       (log/success "Source files unchanged. Skipping compilation."))))
 
 (defn prep-jar [config step-msg classes-dir is-uberjar]
   (log/step step-msg)
-  (shell/sh (str "mkdir -p target " classes-dir))
+  (mkdir-p "target")
+  (mkdir-p classes-dir)
   (if is-uberjar
     (do
       (log/info "Unzipping dependency jars...")
       (let [cp-jars (get-classpath-jars config ".")
-            jars (filter (fn [x] (not (empty? x))) (str/split cp-jars ":"))]
+            jars (filter (fn [x] (not (empty? x))) (str/split cp-jars classpath-separator))]
         (loop [rem-jars jars]
           (if (not (empty? rem-jars))
             (do
-              (shell/sh (str "unzip -q -o '" (first rem-jars) "' -d " classes-dir "/ 2>/dev/null || true"))
+              (unzip-file (first rem-jars) classes-dir)
               (recur (rest rem-jars))))))))
   (log/info "Copying compiled classes...")
-  (shell/sh (str "cp -R classes/* " classes-dir "/ 2>/dev/null || true"))
+  (copy-dir-contents "classes" classes-dir)
   (log/info "Copying resources...")
   (let [res-dir (or (:resource-dir config) "src/main/resources")]
-    (shell/sh (str "if [ -d " res-dir " ]; then cp -R " res-dir "/* " classes-dir "/ 2>/dev/null || true; fi")))
+    (copy-dir-contents res-dir classes-dir))
   (log/info "Writing Manifest...")
   (let [main-class (:main-class config)]
     (if main-class
@@ -247,8 +374,8 @@
         suffix (if (and tname (not (= tname task-id))) (str "-" tname) "")
         default-jar (str "target/" app-name "-" app-version suffix out-suffix)
         jar-name (or (:jar-name config) default-jar)]
-    (shell/sh (str "mkdir -p \"$(dirname '" jar-name "')\""))
-    (let [cmd (str (get-java-bin config "jar") " cfm '" jar-name "' Manifest.txt -C " classes-dir " .")]
+    (io/make-parents jar-name)
+    (let [cmd (str (get-java-bin config "jar") " cfm \"" jar-name "\" Manifest.txt -C " classes-dir " .")]
       (log/info (str "Running: " cmd))
       (let [res (shell/sh cmd)]
         (if (not (= 0 (:code res)))
@@ -298,19 +425,17 @@
   (let [test-dir (or (:test-dir config) (if (io/exists? "src/test/java") "src/test/java" "src/tests"))]
     (if (io/exists? test-dir)
       (do
-        (shell/sh "mkdir -p test-classes")
-        (let [check-src-res (shell/sh (str "find " test-dir " -name '*.java' -newer test-classes/.last_test_compile 2>/dev/null | head -n 1"))
-              check-classes-res (shell/sh "find classes -name '.last_compile' -newer test-classes/.last_test_compile 2>/dev/null | head -n 1")
-              needs-compile (or (not (io/exists? "test-classes/.last_test_compile")) 
-                                (> (count (str/trim (:stdout check-src-res))) 0)
-                                (> (count (str/trim (:stdout check-classes-res))) 0))]
+        (mkdir-p "test-classes")
+        (let [needs-compile (or (not (io/exists? "test-classes/.last_test_compile"))
+                                (any-file-newer? test-dir "test-classes/.last_test_compile")
+                                (any-file-newer? "classes" "test-classes/.last_test_compile"))]
           (if needs-compile
             (let [java-files (find-java-files test-dir)]
               (if (> (count java-files) 0)
                 (do
                   (log/step "Running tests...")
                   (let [cp-jars (get-classpath-jars config ".")
-                        cp-arg (str "-cp \"classes:test-classes" (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
+                        cp-arg (str "-cp \"classes" classpath-separator "test-classes" (if (empty? cp-jars) "" (str classpath-separator cp-jars)) "\"")
                         files-arg (str/join " " java-files)
                         cmd (str (get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
                     (log/info "Compiling tests...")
@@ -320,8 +445,7 @@
                           (log/error "Test compilation failed!")
                           (println (:stderr res))
                           (sys-exit 1))
-                        (let [test-classes (let [res2 (shell/sh (str "find " test-dir " -name \"*Test.java\" | sed 's|^" test-dir "/||; s|\\.java$||; s|/|.|g'"))]
-                                             (if (= 0 (:code res2)) (str/trim (:stdout res2)) ""))]
+                        (let [test-classes (find-test-classes test-dir)]
                           (if (not (empty? test-classes))
                             (let [use-junit5 (str/includes? cp-jars "junit-platform-console")
                                   test-cmd (if use-junit5
@@ -336,7 +460,7 @@
                                                (str (get-java-bin config "java") " " cp-arg " org.junit.platform.console.ConsoleLauncher " junit5-args))
                                              (str (get-java-bin config "java") " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " ")))]
                               (let [test-res (shell/sh test-cmd)]
-                                (shell/sh "mkdir -p target")
+                                (mkdir-p "target")
                                 (io/write-file "target/test-report.txt" (:stdout test-res))
                                 (println (:stdout test-res))
                                 (if (not (= 0 (:code test-res)))
@@ -346,7 +470,7 @@
                                     (sys-exit 1))
                                   (do
                                     (log/success "All tests passed! Report saved to target/test-report.txt.")
-                                    (shell/sh "touch test-classes/.last_test_compile")))))
+                                    (io/write-file "test-classes/.last_test_compile" "")))))
                             (log/warn "No *Test.java files found to run.")))))))
                 (log/warn "No test java files found.")))
             (log/success "Test source files and main classes unchanged. Skipping tests."))))
@@ -362,7 +486,7 @@
         (log/step (str "Running " main-class "..."))
         (let [cp-jars (get-classpath-jars config ".")
               res-dir (or (:resource-dir config) "src/main/resources")
-              cp-arg (str "-cp \"classes" (if (io/exists? res-dir) (str ":" res-dir) "") (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
+              cp-arg (str "-cp \"classes" (if (io/exists? res-dir) (str classpath-separator res-dir) "") (if (empty? cp-jars) "" (str classpath-separator cp-jars)) "\"")
               cmd (str (get-java-bin config "java") " " cp-arg " " main-class)]
           (let [res (shell/sh cmd)]
             (if (not (= 0 (:code res)))
@@ -426,21 +550,14 @@
         suffix (if (and tname (not (= tname "zip"))) (str "-" tname) "")
         default-zip (str "target/" app-name "-" app-version suffix ".zip")
         zip-name (or (:zip-name config) default-zip)
-        zip-base-name (or (:zip-name config) (str app-name "-" app-version suffix ".zip"))]
+        includes (or (:zip-includes config) (get-default-zip-files))]
     (log/step (str "Creating zip archive " zip-name "..."))
-    (shell/sh (str "mkdir -p \"$(dirname '" zip-name "')\""))
-    (if (:zip-includes config)
-      (let [includes-str (str/join " " (:zip-includes config))
-            cmd (str "zip -q -r '" zip-name "' " includes-str)]
-        (let [res (shell/sh cmd)]
-           (if (not (= (:code res) 0))
-             (do
-               (log/error "Zip failed!")
-               (println (:stderr res)))
-             (log/success (str "Successfully created " zip-name)))))
-      (let [cmd (str "cd target && zip -q '" zip-base-name "' *.jar *.txt *.pom 2>/dev/null || true")]
-        (shell/sh cmd)
-        (log/success (str "Successfully created " zip-name))))))
+    (io/make-parents zip-name)
+    (if (empty? includes)
+      (log/warn "No files found to zip.")
+      (if (zip-archive zip-name includes)
+        (log/success (str "Successfully created " zip-name))
+        (log/error "Zip archive creation failed!")))))
 
 (defn exec-template [config]
   (let [tpls (:templates config)]
@@ -459,7 +576,7 @@
                       version (or (:version config) "unknown")
                       res1 (str/replace content "${name}" name)
                       res2 (str/replace res1 "${version}" version)]
-                  (shell/sh (str "mkdir -p \"$(dirname '" out-file "')\""))
+                  (io/make-parents out-file)
                   (io/write-file out-file res2))
                 (log/warn (str "Template file not found: " in-file)))
               (recur (rest rem))))))
