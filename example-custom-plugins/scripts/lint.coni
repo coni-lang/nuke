@@ -1,0 +1,29 @@
+;; Auto-download Checkstyle and run linting on Java sources
+(let [jar-path "libs/checkstyle-10.12.3-all.jar"
+      url "https://github.com/checkstyle/checkstyle/releases/download/checkstyle-10.12.3/checkstyle-10.12.3-all.jar"]
+  (if (not (io/exists? jar-path))
+    (do
+      (println "==> Checkstyle jar not found. Downloading Checkstyle 10.12.3...")
+      (shell/sh "mkdir -p libs")
+      (let [res (shell/sh (str "curl -L -s -f -o " jar-path " " url))]
+        (if (not (io/exists? jar-path))
+          (do
+            (println "❌ Failed to download Checkstyle from " url)
+            (println "Stderr:" (:stderr res))
+            (sys-exit 1))
+          (println "✓ Checkstyle downloaded successfully.")))))
+  (if (io/exists? jar-path)
+    (do
+      (println "==> Linting Java sources with Checkstyle...")
+      (let [res (shell/sh (str "java -jar " jar-path " -c checkstyle.xml src/main"))
+            output (:stdout res)
+            errors (:stderr res)]
+        (if (not (empty? output))
+          (println output))
+        (if (not (empty? errors))
+          (println errors))
+        (if (= (:code res) 0)
+          (println "✓ Lint check passed successfully!")
+          (do
+            (println "❌ Lint check failed. Please fix style violations.")
+            (sys-exit (:code res))))))))

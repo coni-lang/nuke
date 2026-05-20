@@ -87,7 +87,7 @@
         (let [maven-deps (:dependencies dep-cfg)
               repos (or (:repositories dep-cfg) ["https://repo1.maven.org/maven2"])]
           (if maven-deps
-            (maven/resolve-and-link-deps abs-path maven-deps repos)))
+            (maven/resolve-deps maven-deps repos)))
         ; 2. Recurse into local deps of this dep
         (let [sub-deps (:local-dependencies dep-cfg)]
           (if sub-deps
@@ -122,8 +122,8 @@
                       (io/write-file out-file res2)))
                   (recur (rest rem)))))))
         ; 3. Compile sources
-        (let [src-dirs (or (:src-dirs dep-cfg) ["src/main"])
-              cp-str   (str/trim (:stdout (shell/sh (str "ls '" abs-path "/libs'/*.jar 2>/dev/null | tr '\\n' ':' | sed 's/:$//'"))))
+        (let [src-dirs (or (:src-dirs dep-cfg) (if (io/exists? (str abs-path "/src/main/java")) ["src/main/java"] ["src/main"]))
+              cp-str   (get-classpath-jars dep-cfg abs-path)
               src-args (loop [rem src-dirs acc ""]
                          (if (empty? rem) acc
                            (recur (rest rem) (str acc " '" abs-path "/" (first rem) "'"))))]
@@ -143,8 +143,10 @@
   (let [repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
         deps (:dependencies config)]
     (if deps
-      (let [pwd (str/trim (:stdout (shell/sh "pwd")))]
-        (maven/resolve-and-link-deps pwd deps repos))))
+      (do
+        (log/step "Downloading dependencies to ~/.m2/repository...")
+        (maven/resolve-deps deps repos)
+        (log/success "All dependencies downloaded successfully!"))))
   (let [local-deps (:local-dependencies config)]
     (if local-deps
       (loop [rem local-deps]
@@ -169,9 +171,26 @@
       (str conf-home "/bin/" bin-name)
       (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"" bin-name))))
 
+(defn get-classpath-jars [config base-path]
+  (let [libs-dir (if (= base-path ".") "libs" (str base-path "/libs"))
+        local-jars (let [res (shell/sh (str "find '" libs-dir "' -name \"*.jar\" 2>/dev/null"))]
+                     (if (= 0 (:code res))
+                       (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))
+                       []))
+        maven-jars (if (:dependencies config)
+                     (maven/resolve-deps (:dependencies config) (or (:repositories config) ["https://repo1.maven.org/maven2"]))
+                     [])]
+    (loop [rem maven-jars acc (to-vec local-jars)]
+      (if (empty? rem)
+        (str/join ":" acc)
+        (recur (rest rem) (conj acc (first rem)))))))
+
+(defn exec-classpath [config]
+  (println (get-classpath-jars config ".")))
+
 (defn exec-compile [config]
   (shell/sh "mkdir -p classes")
-  (let [src-dir (or (:src-dir config) "src/main")
+  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
         check-res (shell/sh (str "find " src-dir " -name '*.java' -newer classes/.last_compile 2>/dev/null | head -n 1"))
         needs-compile (or (not (io/exists? "classes/.last_compile")) 
                           (> (count (str/trim (:stdout check-res))) 0))]
@@ -180,10 +199,7 @@
         (if (> (count java-files) 0)
           (do
             (log/step "Compiling Java files...")
-            (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
-                            (if (= 0 (:code res))
-                              (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
-                              ""))
+            (let [cp-jars (get-classpath-jars config ".")
                   cp-arg (if (empty? cp-jars) "" (str "-cp \"" cp-jars "\""))
                   encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
                   opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
@@ -206,7 +222,13 @@
   (if is-uberjar
     (do
       (log/info "Unzipping dependency jars...")
-      (shell/sh (str "for jar in libs/*.jar; do unzip -q -o \"$jar\" -d " classes-dir "/ 2>/dev/null || true; done"))))
+      (let [cp-jars (get-classpath-jars config ".")
+            jars (filter (fn [x] (not (empty? x))) (str/split cp-jars ":"))]
+        (loop [rem-jars jars]
+          (if (not (empty? rem-jars))
+            (do
+              (shell/sh (str "unzip -q -o '" (first rem-jars) "' -d " classes-dir "/ 2>/dev/null || true"))
+              (recur (rest rem-jars))))))))
   (log/info "Copying compiled classes...")
   (shell/sh (str "cp -R classes/* " classes-dir "/ 2>/dev/null || true"))
   (log/info "Copying resources...")
@@ -273,7 +295,7 @@
          "</project>\n")))
 
 (defn exec-test [config]
-  (let [test-dir (or (:test-dir config) "src/tests")]
+  (let [test-dir (or (:test-dir config) (if (io/exists? "src/test/java") "src/test/java" "src/tests"))]
     (if (io/exists? test-dir)
       (do
         (shell/sh "mkdir -p test-classes")
@@ -287,10 +309,7 @@
               (if (> (count java-files) 0)
                 (do
                   (log/step "Running tests...")
-                  (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
-                                  (if (= 0 (:code res))
-                                    (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
-                                    ""))
+                  (let [cp-jars (get-classpath-jars config ".")
                         cp-arg (str "-cp \"classes:test-classes" (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
                         files-arg (str/join " " java-files)
                         cmd (str (get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
@@ -341,10 +360,7 @@
         (sys-exit 1))
       (do
         (log/step (str "Running " main-class "..."))
-        (let [cp-jars (let [res (shell/sh "find libs -name \"*.jar\" 2>/dev/null")]
-                        (if (= 0 (:code res))
-                          (str/join ":" (to-vec (filter (fn [x] (not (empty? x))) (str/split (str/trim (:stdout res)) "\n"))))
-                          ""))
+        (let [cp-jars (get-classpath-jars config ".")
               res-dir (or (:resource-dir config) "src/main/resources")
               cp-arg (str "-cp \"classes" (if (io/exists? res-dir) (str ":" res-dir) "") (if (empty? cp-jars) "" (str ":" cp-jars)) "\"")
               cmd (str (get-java-bin config "java") " " cp-arg " " main-class)]
@@ -459,6 +475,7 @@
 (register-task "clean" [] "Clean build directories" exec-clean)
 (register-task "template" [] "Process source templates" exec-template)
 (register-task "download-deps" [] "Download project dependencies" exec-download-deps)
+(register-task "classpath" [] "Print the project classpath" exec-classpath)
 (register-task "compile" ["template" "download-deps"] "Compile Java source files" exec-compile)
 (register-task "test" ["compile"] "Run JUnit tests" exec-test)
 (register-task "run" ["compile"] "Run the Java application" exec-run)

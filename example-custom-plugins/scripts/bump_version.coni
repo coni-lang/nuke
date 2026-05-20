@@ -5,7 +5,7 @@
       parts   (str/split version ".")
       major   (get parts 0)
       minor   (get parts 1)
-      patch   (str (+ 1 (parse-int (get parts 2))))
+      patch   (str (+ 1 (int (get parts 2))))
       new-ver (str major "." minor "." patch)
       content (io/read-file "nuke.edn")
       updated (str/replace content (str "\"" version "\"") (str "\"" new-ver "\""))]

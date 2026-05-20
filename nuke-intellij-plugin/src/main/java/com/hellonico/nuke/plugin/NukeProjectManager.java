@@ -211,18 +211,34 @@ public class NukeProjectManager {
             pruneModel.commit();
 
             // --- Phase 2.5: configure third party jars (excluding local project jars) ---
-            File libsDir = new File(basePath, "libs");
             List<String> jarUrls = new ArrayList<>();
-            if (libsDir.exists() && libsDir.isDirectory()) {
-                File[] libFiles = libsDir.listFiles();
-                if (libFiles != null) {
-                    for (File f : libFiles) {
-                        if (!f.getName().endsWith(".jar")) continue;
+            List<String> classpathJars = getProjectClasspath(basePath);
+            if (!classpathJars.isEmpty()) {
+                for (String path : classpathJars) {
+                    File f = new File(path);
+                    if (f.exists() && f.getName().endsWith(".jar")) {
                         boolean isLocal = false;
                         for (String lpn : localProjectNames) {
                             if (f.getName().startsWith(lpn + "-")) { isLocal = true; break; }
                         }
-                        if (!isLocal) jarUrls.add(VfsUtil.getUrlForLibraryRoot(f));
+                        if (!isLocal) {
+                            jarUrls.add(VfsUtil.getUrlForLibraryRoot(f));
+                        }
+                    }
+                }
+            } else {
+                File libsDir = new File(basePath, "libs");
+                if (libsDir.exists() && libsDir.isDirectory()) {
+                    File[] libFiles = libsDir.listFiles();
+                    if (libFiles != null) {
+                        for (File f : libFiles) {
+                            if (!f.getName().endsWith(".jar")) continue;
+                            boolean isLocal = false;
+                            for (String lpn : localProjectNames) {
+                                if (f.getName().startsWith(lpn + "-")) { isLocal = true; break; }
+                            }
+                            if (!isLocal) jarUrls.add(VfsUtil.getUrlForLibraryRoot(f));
+                        }
                     }
                 }
             }
@@ -249,13 +265,25 @@ public class NukeProjectManager {
                     ContentEntry ce = root != null ? depModel.addContentEntry(root) : depModel.addContentEntry(VfsUtil.pathToUrl(depDir.getAbsolutePath()));
                     ce.clearSourceFolders();
                     java.util.List<String> srcDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":src-dirs");
-                    if (srcDirs.isEmpty()) srcDirs.add("src/main");
+                    if (srcDirs.isEmpty()) {
+                        if (new File(depDir, "src/main/java").exists()) {
+                            srcDirs.add("src/main/java");
+                        } else {
+                            srcDirs.add("src/main");
+                        }
+                    }
                     for (String dir : srcDirs) {
                         VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/" + dir);
                         if (vf != null) ce.addSourceFolder(vf, false);
                     }
                     java.util.List<String> testDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":test-dirs");
-                    if (testDirs.isEmpty()) testDirs.add("src/tests");
+                    if (testDirs.isEmpty()) {
+                        if (new File(depDir, "src/test/java").exists()) {
+                            testDirs.add("src/test/java");
+                        } else {
+                            testDirs.add("src/tests");
+                        }
+                    }
                     for (String dir : testDirs) {
                         VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/" + dir);
                         if (vf != null) ce.addSourceFolder(vf, true);
@@ -290,13 +318,25 @@ public class NukeProjectManager {
                 ContentEntry entry = root != null ? model.addContentEntry(root) : model.addContentEntry(VfsUtil.pathToUrl(basePath));
                 entry.clearSourceFolders();
                 java.util.List<String> srcDirs = parseArray(basePath + "/nuke.edn", ":src-dirs");
-                if (srcDirs.isEmpty()) srcDirs.add("src/main");
+                if (srcDirs.isEmpty()) {
+                    if (new File(basePath, "src/main/java").exists()) {
+                        srcDirs.add("src/main/java");
+                    } else {
+                        srcDirs.add("src/main");
+                    }
+                }
                 for (String dir : srcDirs) {
                     VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/" + dir);
                     if (vf != null) entry.addSourceFolder(vf, false);
                 }
                 java.util.List<String> testDirs = parseArray(basePath + "/nuke.edn", ":test-dirs");
-                if (testDirs.isEmpty()) testDirs.add("src/tests");
+                if (testDirs.isEmpty()) {
+                    if (new File(basePath, "src/test/java").exists()) {
+                        testDirs.add("src/test/java");
+                    } else {
+                        testDirs.add("src/tests");
+                    }
+                }
                 for (String dir : testDirs) {
                     VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/" + dir);
                     if (vf != null) entry.addSourceFolder(vf, true);
@@ -326,5 +366,28 @@ public class NukeProjectManager {
             }
         } catch (Exception e) {}
         return res;
+    }
+
+    private static List<String> getProjectClasspath(String basePath) {
+        List<String> paths = new ArrayList<>();
+        try {
+            ProcessBuilder pb = new ProcessBuilder(getNukeExecutable(), "classpath");
+            pb.directory(new File(basePath));
+            Process p = pb.start();
+            java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
+            String line = reader.readLine();
+            if (line != null && !line.trim().isEmpty()) {
+                String[] parts = line.trim().split(":");
+                for (String part : parts) {
+                    if (!part.isEmpty()) {
+                        paths.add(part);
+                    }
+                }
+            }
+            p.waitFor();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return paths;
     }
 }
