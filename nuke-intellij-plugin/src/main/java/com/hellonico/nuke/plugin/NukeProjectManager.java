@@ -32,15 +32,31 @@ import java.util.List;
 public class NukeProjectManager {
     public static String getNukeExecutable() {
         String path = NukeSettings.getInstance().getNukeExecutablePath();
-        if (path != null && !path.isEmpty() && !path.equals("nuke") && new File(path).exists()) {
-            return path;
-        }
-        
         String os = System.getProperty("os.name").toLowerCase();
         boolean isWindows = os.contains("win");
         boolean isMac = os.contains("mac");
+
+        if (isWindows) {
+            if (path != null && !path.isEmpty() && !path.equals("nuke")) {
+                File f = new File(path);
+                if (f.exists() && f.isFile() && path.endsWith(".exe")) {
+                    return path;
+                }
+                File fExe = new File(path + ".exe");
+                if (fExe.exists() && fExe.isFile()) {
+                    return fExe.getAbsolutePath();
+                }
+            }
+        } else {
+            if (path != null && !path.isEmpty() && !path.equals("nuke")) {
+                File f = new File(path);
+                if (f.exists() && f.isFile()) {
+                    return path;
+                }
+            }
+        }
+
         String binName = isWindows ? "nuke.exe" : (isMac ? "nuke-mac" : "nuke-linux");
-        
         try {
             File tmpDir = new File(System.getProperty("java.io.tmpdir"), "nuke-intellij-plugin");
             tmpDir.mkdirs();
