@@ -227,10 +227,14 @@
 (defn get-java-bin [config bin-name]
   (let [conf-home (:java-home config)]
     (if conf-home
-      (str "\"" conf-home "/bin/" bin-name "\"")
+      (let [raw-path (str conf-home "/bin/" bin-name)
+            path (if (= (sys-os-name) "windows") (str/replace raw-path "/" "\\") raw-path)]
+        (str "\"" path "\""))
       (let [env-home (sys-env-get "JAVA_HOME")]
         (if (and env-home (not (= env-home "")))
-          (str "\"" (str/trim env-home) "/bin/" bin-name "\"")
+          (let [raw-path (str (str/trim env-home) "/bin/" bin-name)
+                path (if (= (sys-os-name) "windows") (str/replace raw-path "/" "\\") raw-path)]
+            (str "\"" path "\""))
           bin-name)))))
 
 (defn get-classpath-jars [config base-path]
