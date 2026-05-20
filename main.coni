@@ -3,6 +3,7 @@
 (require "libs/str/src/str.coni" :as str)
 (require "libs/edn/src/edn.coni" :as edn)
 (require "libs/os/src/log.coni" :as log)
+(require "libs/maven/src/maven.coni" :as maven)
 
 (def nuke-version "1.0.1")
 (def nuke-build-time "DEV")
@@ -71,221 +72,6 @@
 ; Build a local dependency jar entirely in-process (no external nuke subprocess).
 ; Reads the dep's nuke.edn, downloads its Maven deps, recurses into its local deps,
 ; compiles and packages — all using absolute paths.
-;; Helper to find substring between two markers
-(defn substring-between [s start-marker end-marker]
-  (let [start-idx (str/index-of s start-marker)]
-    (if (>= start-idx 0)
-      (let [val-start (+ start-idx (count start-marker))
-            end-idx (str/index-of (str/substring s val-start (count s)) end-marker)]
-        (if (>= end-idx 0)
-          (str/substring s val-start (+ val-start end-idx))
-          nil))
-      nil)))
-
-;; Remove a substring between start-marker and end-marker (inclusive)
-(defn remove-between [s start-marker end-marker]
-  (let [start-idx (str/index-of s start-marker)]
-    (if (>= start-idx 0)
-      (let [val-start start-idx
-            end-idx (str/index-of (str/substring s start-idx (count s)) end-marker)]
-        (if (>= end-idx 0)
-          (let [end-pos (+ start-idx end-idx (count end-marker))]
-            (str/join "" [(str/substring s 0 val-start)
-                          (str/substring s end-pos (count s))]))
-          s))
-      s)))
-
-;; Clean POM content by removing unrelated blocks
-(defn clean-pom-content [content]
-  (let [c1 (remove-between content "<dependencyManagement>" "</dependencyManagement>")
-        c2 (remove-between c1 "<build>" "</build>")
-        c3 (remove-between c2 "<reporting>" "</reporting>")
-        c4 (remove-between c3 "<profiles>" "</profiles>")]
-    c4))
-
-;; Parse properties inside a <properties> block
-(defn parse-properties [content]
-  (let [props-xml (substring-between content "<properties>" "</properties>")]
-    (if (nil? props-xml)
-      {}
-      (loop [s props-xml acc {}]
-        (let [start-tag-idx (str/index-of s "<")]
-          (if (< start-tag-idx 0)
-            acc
-            (let [end-tag-idx (str/index-of (str/substring s start-tag-idx (count s)) ">")]
-              (if (< end-tag-idx 0)
-                acc
-                (let [tag-name (str/substring s (+ start-tag-idx 1) (+ start-tag-idx end-tag-idx))
-                      close-tag (str "</" tag-name ">")
-                      val-start (+ start-tag-idx end-tag-idx 1)
-                      close-tag-idx (str/index-of (str/substring s val-start (count s)) close-tag)]
-                  (if (< close-tag-idx 0)
-                    (recur (str/substring s val-start (count s)) acc)
-                    (let [val (str/substring s val-start (+ val-start close-tag-idx))
-                          new-acc (assoc acc tag-name (str/trim val))
-                          next-s (str/substring s (+ val-start close-tag-idx (count close-tag)) (count s))]
-                      (recur next-s new-acc))))))))))))
-
-;; Parse parent POM info
-(defn parse-parent [content]
-  (let [parent-block (substring-between content "<parent>" "</parent>")]
-    (if (nil? parent-block)
-      nil
-      {:groupId (str/trim (or (substring-between parent-block "<groupId>" "</groupId>") ""))
-       :artifactId (str/trim (or (substring-between parent-block "<artifactId>" "</artifactId>") ""))
-       :version (str/trim (or (substring-between parent-block "<version>" "</version>") ""))})))
-
-;; Parse self coordinates of this POM (groupId, artifactId, version)
-(defn parse-self [content]
-  (let [clean-content (remove-between content "<parent>" "</parent>")
-        clean-content (remove-between clean-content "<dependencies>" "</dependencies>")
-        g (str/trim (or (substring-between clean-content "<groupId>" "</groupId>") ""))
-        a (str/trim (or (substring-between clean-content "<artifactId>" "</artifactId>") ""))
-        v (str/trim (or (substring-between clean-content "<version>" "</version>") ""))]
-    {:groupId g :artifactId a :version v}))
-
-;; Parse dependencies from a POM content string
-(defn parse-dependencies [content]
-  (let [cleaned (clean-pom-content content)
-        deps-block (substring-between cleaned "<dependencies>" "</dependencies>")]
-    (if (nil? deps-block)
-      []
-      (loop [s deps-block acc []]
-        (let [dep-idx (str/index-of s "<dependency>")]
-          (if (< dep-idx 0)
-            acc
-            (let [end-dep-idx (str/index-of (str/substring s dep-idx (count s)) "</dependency>")]
-              (if (< end-dep-idx 0)
-                acc
-                (let [dep-block (str/substring s dep-idx (+ dep-idx end-dep-idx (count "</dependency>")))
-                      g (str/trim (or (substring-between dep-block "<groupId>" "</groupId>") ""))
-                      a (str/trim (or (substring-between dep-block "<artifactId>" "</artifactId>") ""))
-                      v (str/trim (or (substring-between dep-block "<version>" "</version>") ""))
-                      scope (str/trim (or (substring-between dep-block "<scope>" "</scope>") "compile"))
-                      dep-info {:groupId g :artifactId a :version v :scope scope}
-                      new-acc (if (and (not= g "") (not= a ""))
-                                (conj acc dep-info)
-                                acc)
-                      next-s (str/substring s (+ dep-idx end-dep-idx (count "</dependency>")) (count s))]
-                  (recur next-s new-acc))))))))))
-
-;; Resolve property placeholder
-(defn resolve-placeholder [val props self parent]
-  (if (and (str/starts-with? val "${") (str/ends-with? val "}"))
-    (let [key (str/substring val 2 (- (count val) 1))]
-      (cond
-        (= key "project.version") (:version self)
-        (= key "pom.version") (:version self)
-        (= key "project.groupId") (:groupId self)
-        (= key "pom.groupId") (:groupId self)
-        (= key "project.parent.version") (if parent (:version parent) val)
-        (= key "parent.version") (if parent (:version parent) val)
-        :else (or (get props key) val)))
-    val))
-
-;; Convert Maven coordinates to a local path in ~/.m2/repository
-(defn coord-to-m2-path [g a v ext]
-  (let [home (io/expand-home "~/.m2/repository")
-        g-path (str/replace g "." "/")]
-    (str home "/" g-path "/" a "/" v "/" a "-" v "." ext)))
-
-;; Download a file from a list of repositories if it is missing locally
-(defn download-file-if-missing [g a v ext repos]
-  (let [local-path (coord-to-m2-path g a v ext)]
-    (if (io/exists? local-path)
-      local-path
-      (let [g-path (str/replace g "." "/")
-            filename (str a "-" v "." ext)]
-        (loop [r-rem repos]
-          (if (empty? r-rem)
-            (do
-              (log/error (str "Could not download " filename " from any repository."))
-              nil)
-            (let [repo-url (first r-rem)
-                  base-url (if (str/ends-with? repo-url "/") (str/substring repo-url 0 (- (count repo-url) 1)) repo-url)
-                  url (str base-url "/" g-path "/" a "/" v "/" filename)]
-              (log/info (str "Downloading " filename " from " repo-url "..."))
-              (io/make-parents local-path)
-              (let [res (shell/sh (str "curl -L -s -f -o '" local-path "' '" url "'"))]
-                (if (= 0 (:code res))
-                  local-path
-                  (do
-                    ;; Cleanup failed download
-                    (shell/sh (str "rm -f '" local-path "'"))
-                    (recur (rest r-rem))))))))))))
-
-;; Check if a collection contains an item
-(defn in-list? [coll item]
-  (loop [rem coll]
-    (if (empty? rem)
-      false
-      (if (= (first rem) item)
-        true
-        (recur (rest rem))))))
-
-;; Recursively resolve dependencies (transitive resolution loop)
-(defn resolve-deps [direct-deps repos]
-  (loop [queue (loop [rem direct-deps acc []]
-                 (if (empty? rem) acc
-                   (let [parts (str/split (first rem) ":")
-                         dep-map {:groupId (get parts 0)
-                                  :artifactId (get parts 1)
-                                  :version (get parts 2)
-                                  :scope "compile"}]
-                     (recur (rest rem) (conj acc dep-map)))))
-         resolved-jars []
-         visited []]
-    (if (empty? queue)
-      resolved-jars
-      (let [dep (first queue)
-            g (:groupId dep)
-            a (:artifactId dep)
-            v (:version dep)
-            scope (:scope dep)
-            coord-key (str g ":" a)]
-        (if (or (in-list? visited coord-key) (in-list? ["test" "provided" "system"] scope))
-          ;; Already processed or excluded scope, skip
-          (recur (rest queue) resolved-jars visited)
-          (do
-            (log/info (str "Resolving " g ":" a ":" v " [" scope "]"))
-            ;; 1. Download JAR and POM
-            (let [jar-path (download-file-if-missing g a v "jar" repos)
-                  pom-path (download-file-if-missing g a v "pom" repos)]
-              (if (and jar-path pom-path)
-                ;; 2. Read and parse POM
-                (let [pom-content (io/read-file pom-path)
-                      self (parse-self pom-content)
-                      parent (parse-parent pom-content)
-                      props (parse-properties pom-content)
-                      child-deps (parse-dependencies pom-content)
-                      ;; Resolve placeholders in child dependencies
-                      resolved-child-deps (loop [crem child-deps cacc []]
-                                            (if (empty? crem) cacc
-                                              (let [cdep (first crem)
-                                                    cv (:version cdep)
-                                                    cv-resolved (resolve-placeholder cv props self parent)
-                                                    resolved-cdep (assoc cdep :version cv-resolved)]
-                                                (recur (rest crem) (conj cacc resolved-cdep)))))
-                      ;; Enqueue children
-                      new-queue (loop [crem resolved-child-deps qacc (rest queue)]
-                                  (if (empty? crem) qacc
-                                    (recur (rest crem) (conj qacc (first crem)))))]
-                  (recur new-queue (conj resolved-jars jar-path) (conj visited coord-key)))
-                ;; Download failed, skip this dependency
-                (recur (rest queue) resolved-jars visited)))))))))
-
-;; Resolve all transitive dependencies and symlink/copy them to the project's libs/ folder
-(defn resolve-and-link-deps [abs-path deps repos]
-  (shell/sh (str "mkdir -p '" abs-path "/libs'"))
-  (shell/sh (str "rm -f '" abs-path "/libs/'*.jar 2>/dev/null || true"))
-  (let [resolved-paths (resolve-deps deps repos)]
-    (loop [rem resolved-paths]
-      (if (not (empty? rem))
-        (let [jar-path (first rem)
-              fname (io/file-name jar-path)]
-          (shell/sh (str "ln -sf '" jar-path "' '" abs-path "/libs/" fname "' 2>/dev/null || cp '" jar-path "' '" abs-path "/libs/" fname "'"))
-          (recur (rest rem)))))))
-
 (defn build-dep-jar [abs-path]
   (let [edn-file (str abs-path "/nuke.edn")
         dep-cfg  (if (io/exists? edn-file)
@@ -301,7 +87,7 @@
         (let [maven-deps (:dependencies dep-cfg)
               repos (or (:repositories dep-cfg) ["https://repo1.maven.org/maven2"])]
           (if maven-deps
-            (resolve-and-link-deps abs-path maven-deps repos)))
+            (maven/resolve-and-link-deps abs-path maven-deps repos)))
         ; 2. Recurse into local deps of this dep
         (let [sub-deps (:local-dependencies dep-cfg)]
           (if sub-deps
@@ -358,7 +144,7 @@
         deps (:dependencies config)]
     (if deps
       (let [pwd (str/trim (:stdout (shell/sh "pwd")))]
-        (resolve-and-link-deps pwd deps repos))))
+        (maven/resolve-and-link-deps pwd deps repos))))
   (let [local-deps (:local-dependencies config)]
     (if local-deps
       (loop [rem local-deps]
@@ -571,25 +357,6 @@
               (if (not (empty? (str/trim (:stdout res))))
                 (println (str/trim (:stdout res)))))))))))
 
-(defn parse-m2-settings-credentials [server-id]
-  (let [settings-path (io/expand-home "~/.m2/settings.xml")]
-    (if (io/exists? settings-path)
-      (let [content (io/read-file settings-path)]
-        (loop [s content]
-          (let [server-block (substring-between s "<server>" "</server>")]
-            (if (nil? server-block)
-              nil
-              (let [id (str/trim (or (substring-between server-block "<id>" "</id>") ""))
-                    username (str/trim (or (substring-between server-block "<username>" "</username>") ""))
-                    password (str/trim (or (substring-between server-block "<password>" "</password>") ""))]
-                (if (= id server-id)
-                  {:username username :password password}
-                  (let [idx (str/index-of s "</server>")]
-                    (if (>= idx 0)
-                      (recur (str/substring s (+ idx (count "</server>")) (count s)))
-                      nil))))))))
-      nil)))
-
 (defn exec-upload [config]
   (log/step "Uploading to Nexus...")
   (let [pom-content (generate-pom config)]
@@ -610,7 +377,7 @@
                   (let [env-user (sys-env-get "NUKE_DEPLOY_USER")
                         env-pass (sys-env-get "NUKE_DEPLOY_PASSWORD")
                         m2-creds (if (and (= env-user "") (= env-pass ""))
-                                   (parse-m2-settings-credentials deploy-repo)
+                                   (maven/parse-m2-settings-credentials deploy-repo)
                                    nil)
                         user (cond
                                (not (= env-user "")) env-user
