@@ -227,8 +227,11 @@
 (defn get-java-bin [config bin-name]
   (let [conf-home (:java-home config)]
     (if conf-home
-      (str conf-home "/bin/" bin-name)
-      (str "\"${JAVA_HOME:+$JAVA_HOME/bin/}\"" bin-name))))
+      (str "\"" conf-home "/bin/" bin-name "\"")
+      (let [env-home (sys-env-get "JAVA_HOME")]
+        (if (and env-home (not (= env-home "")))
+          (str "\"" (str/trim env-home) "/bin/" bin-name "\"")
+          bin-name)))))
 
 (defn get-classpath-jars [config base-path]
   (let [libs-dir (if (= base-path ".") "libs" (str base-path "/libs"))
