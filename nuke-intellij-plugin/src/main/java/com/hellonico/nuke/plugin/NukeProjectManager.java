@@ -30,11 +30,32 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class NukeProjectManager {
+    private static String getResourceHash(String resourcePath) {
+        try (java.io.InputStream in = NukeProjectManager.class.getResourceAsStream(resourcePath)) {
+            if (in == null) return "unknown";
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] block = new byte[4096];
+            int length;
+            while ((length = in.read(block)) > 0) {
+                digest.update(block, 0, length);
+            }
+            byte[] hash = digest.digest();
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.substring(0, 12);
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
     public static String getNukeExecutable() {
+        boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
+        boolean isMac = System.getProperty("os.name").toLowerCase().contains("mac");
         String path = NukeSettings.getInstance().getNukeExecutablePath();
-        String os = System.getProperty("os.name").toLowerCase();
-        boolean isWindows = os.contains("win");
-        boolean isMac = os.contains("mac");
 
         if (isWindows) {
             if (path != null && !path.isEmpty() && !path.equals("nuke")) {
@@ -57,12 +78,31 @@ public class NukeProjectManager {
         }
 
         String binName = isWindows ? "nuke.exe" : (isMac ? "nuke-mac" : "nuke-linux");
+        String resourcePath = "/bin/" + binName;
+        String hash = getResourceHash(resourcePath);
+        String finalBinName = isWindows ? ("nuke_" + hash + ".exe") : (isMac ? ("nuke-mac_" + hash) : ("nuke-linux_" + hash));
+
         try {
             File tmpDir = new File(System.getProperty("java.io.tmpdir"), "nuke-intellij-plugin");
             tmpDir.mkdirs();
-            File binFile = new File(tmpDir, binName);
+            File binFile = new File(tmpDir, finalBinName);
             
-            java.io.InputStream in = NukeProjectManager.class.getResourceAsStream("/bin/" + binName);
+            if (binFile.exists() && binFile.isFile() && binFile.length() > 0) {
+                return binFile.getAbsolutePath();
+            }
+
+            File[] files = tmpDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.getName().startsWith("nuke_") || f.getName().startsWith("nuke-mac_") || f.getName().startsWith("nuke-linux_")) {
+                        if (!f.getName().equals(finalBinName)) {
+                            f.delete();
+                        }
+                    }
+                }
+            }
+
+            java.io.InputStream in = NukeProjectManager.class.getResourceAsStream(resourcePath);
             if (in != null) {
                 java.nio.file.Files.copy(in, binFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 in.close();

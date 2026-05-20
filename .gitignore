@@ -32,3 +32,4 @@ nuke-linux
 nuke.exe
 nuke-intellij-plugin/src/main/resources/bin/
 .nuke/
+coni-compiler
