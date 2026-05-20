@@ -19,3 +19,19 @@ if [ "$BUILD_ALL" = "1" ]; then
 else
     CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 /tmp/coni-compiler build .build/main.coni -o nuke
 fi
+
+# Copy to IntelliJ plugin resources
+mkdir -p nuke-intellij-plugin/src/main/resources/bin
+if [ -f nuke ]; then
+    cp nuke nuke-intellij-plugin/src/main/resources/bin/nuke
+fi
+if [ -f nuke-mac ]; then
+    cp nuke-mac nuke-intellij-plugin/src/main/resources/bin/nuke-mac
+    cp nuke-mac nuke-intellij-plugin/src/main/resources/bin/nuke
+fi
+if [ -f nuke-linux ]; then
+    cp nuke-linux nuke-intellij-plugin/src/main/resources/bin/nuke-linux
+fi
+if [ -f nuke.exe ]; then
+    cp nuke.exe nuke-intellij-plugin/src/main/resources/bin/nuke.exe
+fi

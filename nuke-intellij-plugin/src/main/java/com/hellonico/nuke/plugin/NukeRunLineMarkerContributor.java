@@ -43,26 +43,33 @@ public class NukeRunLineMarkerContributor extends RunLineMarkerContributor {
                 }
                 
                 // Exclude other generic EDN keys used by Nuke
-                if (taskName.equals("name") || taskName.equals("version") || taskName.equals("extends") || 
+                if (taskName.equals("repositories") || taskName.equals("name") || taskName.equals("version") || taskName.equals("extends") || 
                     taskName.equals("local-dependencies") || taskName.equals("path") || 
                     taskName.equals("javac-opts") || taskName.equals("tasks")) {
                     return null;
                 }
                 
-                AnAction runAction = new AnAction("Run Nuke Task: " + taskName, "Execute " + taskName, AllIcons.RunConfigurations.TestState.Run) {
+                final String targetTaskName;
+                if (taskName.equals("dependencies") || taskName.equals("test-dependencies")) {
+                    targetTaskName = "download-deps";
+                } else {
+                    targetTaskName = taskName;
+                }
+                
+                AnAction runAction = new AnAction("Run Nuke Task: " + targetTaskName, "Execute " + targetTaskName, AllIcons.RunConfigurations.TestState.Run) {
                     @Override
                     public void actionPerformed(@NotNull AnActionEvent e) {
                         RunManager runManager = RunManager.getInstance(element.getProject());
                         ConfigurationFactory factory = new NukeRunConfigurationType().getConfigurationFactories()[0];
-                        RunnerAndConfigurationSettings settings = runManager.createConfiguration("Nuke " + taskName, factory);
-                        ((NukeRunConfiguration) settings.getConfiguration()).setTaskName(taskName);
+                        RunnerAndConfigurationSettings settings = runManager.createConfiguration("Nuke " + targetTaskName, factory);
+                        ((NukeRunConfiguration) settings.getConfiguration()).setTaskName(targetTaskName);
                         runManager.addConfiguration(settings);
                         runManager.setSelectedConfiguration(settings);
                         ProgramRunnerUtil.executeConfiguration(settings, DefaultRunExecutor.getRunExecutorInstance());
                     }
                 };
                 
-                return new Info(AllIcons.RunConfigurations.TestState.Run, new AnAction[]{runAction}, e -> "Run " + taskName);
+                return new Info(AllIcons.RunConfigurations.TestState.Run, new AnAction[]{runAction}, e -> "Run " + targetTaskName);
             }
         }
         return null;
