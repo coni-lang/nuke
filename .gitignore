@@ -26,6 +26,7 @@ bin
 example-maven-project/nuke
 example-java-uberjar/nuke
 example-java-standard/nuke
+example-junit5/nuke
 nuke-mac
 nuke-linux
 nuke.exe

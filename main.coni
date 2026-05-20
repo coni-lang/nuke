@@ -518,7 +518,18 @@
                         (let [test-classes (let [res2 (shell/sh (str "find " test-dir " -name \"*Test.java\" | sed 's|^" test-dir "/||; s|\\.java$||; s|/|.|g'"))]
                                              (if (= 0 (:code res2)) (str/trim (:stdout res2)) ""))]
                           (if (not (empty? test-classes))
-                            (let [test-cmd (str (get-java-bin config "java") " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " "))]
+                            (let [use-junit5 (str/includes? cp-jars "junit-platform-console")
+                                  test-cmd (if use-junit5
+                                             (let [junit5-args (let [classes (str/split test-classes "\n")]
+                                                                 (loop [rem classes acc []]
+                                                                   (if (empty? rem)
+                                                                     (str/join " " acc)
+                                                                     (let [c (str/trim (first rem))]
+                                                                       (if (empty? c)
+                                                                         (recur (rest rem) acc)
+                                                                         (recur (rest rem) (conj acc (str "--select-class=" c))))))))]
+                                               (str (get-java-bin config "java") " " cp-arg " org.junit.platform.console.ConsoleLauncher " junit5-args))
+                                             (str (get-java-bin config "java") " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " ")))]
                               (let [test-res (shell/sh test-cmd)]
                                 (shell/sh "mkdir -p target")
                                 (io/write-file "target/test-report.txt" (:stdout test-res))
@@ -526,7 +537,8 @@
                                 (if (not (= 0 (:code test-res)))
                                   (do
                                     (log/error "Tests failed! Check target/test-report.txt for details.")
-                                    (println (:stderr test-res)))
+                                    (println (:stderr test-res))
+                                    (sys-exit 1))
                                   (do
                                     (log/success "All tests passed! Report saved to target/test-report.txt.")
                                     (shell/sh "touch test-classes/.last_test_compile")))))
@@ -559,6 +571,25 @@
               (if (not (empty? (str/trim (:stdout res))))
                 (println (str/trim (:stdout res)))))))))))
 
+(defn parse-m2-settings-credentials [server-id]
+  (let [settings-path (io/expand-home "~/.m2/settings.xml")]
+    (if (io/exists? settings-path)
+      (let [content (io/read-file settings-path)]
+        (loop [s content]
+          (let [server-block (substring-between s "<server>" "</server>")]
+            (if (nil? server-block)
+              nil
+              (let [id (str/trim (or (substring-between server-block "<id>" "</id>") ""))
+                    username (str/trim (or (substring-between server-block "<username>" "</username>") ""))
+                    password (str/trim (or (substring-between server-block "<password>" "</password>") ""))]
+                (if (= id server-id)
+                  {:username username :password password}
+                  (let [idx (str/index-of s "</server>")]
+                    (if (>= idx 0)
+                      (recur (str/substring s (+ idx (count "</server>")) (count s)))
+                      nil))))))))
+      nil)))
+
 (defn exec-upload [config]
   (log/step "Uploading to Nexus...")
   (let [pom-content (generate-pom config)]
@@ -576,7 +607,20 @@
                   (let [url (if (str/includes? base-url "/service/rest") 
                                 deploy-url 
                                 (str base-url "/service/rest/v1/components?repository=" deploy-repo))]
-                  (let [cmd (str "curl -sS -f -u admin:lpwesab8 -X POST \"" url "\""
+                  (let [env-user (sys-env-get "NUKE_DEPLOY_USER")
+                        env-pass (sys-env-get "NUKE_DEPLOY_PASSWORD")
+                        m2-creds (if (and (= env-user "") (= env-pass ""))
+                                   (parse-m2-settings-credentials deploy-repo)
+                                   nil)
+                        user (cond
+                               (not (= env-user "")) env-user
+                               m2-creds (:username m2-creds)
+                               :else "admin")
+                        pass (cond
+                               (not (= env-pass "")) env-pass
+                               m2-creds (:password m2-creds)
+                               :else "lpwesab8")
+                        cmd (str "curl -sS -f -u " user ":" pass " -X POST \"" url "\""
                              " -F maven2.groupId=" group-id
                              " -F maven2.artifactId=" app-name
                              " -F maven2.version=" app-version
