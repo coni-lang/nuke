@@ -4,7 +4,7 @@
 (require "libs/edn/src/edn.coni" :as edn)
 (require "libs/os/src/log.coni" :as log)
 (require "libs/maven/src/maven.coni" :as maven)
-(require "../libs/java/src/core.coni" :as java)
+(require "libs/java/src/core.coni" :as java)
 
 (def nuke-version "1.0.1")
 (def nuke-build-time "DEV")
@@ -668,9 +668,9 @@
                      cov-opts (conj base-opts (io/quote-path (str "-javaagent:" agent-dest "=destfile=target/jacoco.exec")))
                      base-tasks (or (:tasks raw-config) {})
                      new-tasks (assoc (assoc (assoc base-tasks
-                                 :prepare-metrics {:desc "Download Jacoco agent" :coni "(require \"../libs/java/src/metrics.coni\" :as m) (m/download-jacoco @global-task-config)"})
+                                 :prepare-metrics {:desc "Download Jacoco agent" :coni "(require \"libs/java/src/metrics.coni\" :as m) (m/download-jacoco @global-task-config)"})
                                  :test-cov {:extends "test" :deps [:compile :prepare-metrics] :test-jvm-opts cov-opts})
-                                 :metrics {:desc "Run the Java metrics toolkit" :deps [:test-cov] :coni "(require \"../libs/java/src/metrics.coni\" :as m) (m/run-all-metrics @global-task-config)"})]
+                                 :metrics {:desc "Run the Java metrics toolkit" :deps [:test-cov] :coni "(require \"libs/java/src/metrics.coni\" :as m) (m/run-all-metrics @global-task-config)"})]
                  (assoc raw-config :tasks new-tasks))]
     (load-custom-tasks config)
     (cond
