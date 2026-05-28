@@ -3,8 +3,9 @@
 (require "libs/str/src/str.coni" :as str)
 (require "libs/edn/src/edn.coni" :as edn)
 (require "libs/os/src/log.coni" :as log)
-(require "libs/maven/src/maven.coni" :as maven)
+(require "libs/java/src/maven.coni" :as maven)
 (require "libs/java/src/core.coni" :as java)
+(require "libs/java/src/jars.coni" :as jars)
 
 (def nuke-version "1.0.1")
 (def nuke-build-time "DEV")
@@ -25,20 +26,6 @@
 
 
 
-#[cfg(windows)]
-(defn link-or-copy-jars [src-dir dest-dir]
-  (if (io/exists? src-dir)
-    (let [entries (io/read-dir src-dir)]
-      (loop [rem entries]
-        (if (not (empty? rem))
-          (let [entry (first rem)]
-            (if (str/ends-with? entry ".jar")
-              (io/copy (str src-dir "/" entry) (str dest-dir "/" entry)))
-            (recur (rest rem))))))))
-
-#[cfg(not(windows))]
-(defn link-or-copy-jars [src-dir dest-dir]
-  (shell/sh (str "for j in " src-dir "/*.jar; do [ -f \"$j\" ] && { ln -sf \"$j\" '" dest-dir "/' 2>/dev/null || cp \"$j\" '" dest-dir "/'; }; done || true")))
 
 (defn get-default-zip-files []
   (if (io/exists? "target")
@@ -111,91 +98,14 @@
   (let [pwd (io/get-pwd)]
     (clean-project pwd config)))
 
-; Build a local dependency jar entirely in-process (no external nuke subprocess).
-; Reads the dep's nuke.edn, downloads its Maven deps, recurses into its local deps,
-; compiles and packages — all using absolute paths.
+; Build a local dependency jar — reads nuke.edn and delegates to jars/build-dep-jar.
 (defn build-dep-jar [abs-path]
   (let [edn-file (str abs-path "/nuke.edn")
         dep-cfg  (if (io/exists? edn-file)
                    (edn/parse-edn (io/read-file edn-file))
-                   {})
-        dep-name    (or (:name dep-cfg) "lib")
-        dep-version (or (:version dep-cfg) "1.0.0")
-        jar-file    (str abs-path "/target/" dep-name "-" dep-version ".jar")]
-    ; Skip rebuild if the jar already exists and is up-to-date
-    (if (not (io/exists? jar-file))
-      (do
-        ; 1. Download Maven deps for this dep
-        (let [maven-deps (:dependencies dep-cfg)
-              repos (or (:repositories dep-cfg) ["https://repo1.maven.org/maven2"])]
-          (if maven-deps
-            (maven/resolve-deps maven-deps repos)))
-        ; 2. Recurse into local deps of this dep
-        (let [sub-deps (:local-dependencies dep-cfg)]
-          (if sub-deps
-            (do
-              (io/mkdir-p (str abs-path "/libs"))
-              (loop [rem sub-deps]
-                (if (not (empty? rem))
-                  (let [ldep (first rem)
-                        rel  (if (string? ldep) ldep (:path ldep))
-                        sub-abs (str abs-path "/" rel)]
-                    (if rel
-                      (do
-                        (build-dep-jar sub-abs)
-                        (link-or-copy-jars (str sub-abs "/target") (str abs-path "/libs"))
-                        (link-or-copy-jars (str sub-abs "/libs") (str abs-path "/libs"))))
-                    (recur (rest rem))))))))
-        ; 2.5 Process templates
-        (let [tpls (:templates dep-cfg)]
-          (if tpls
-            (loop [rem tpls]
-              (if (not (empty? rem))
-                (let [tpl (first rem)
-                      in-file (str abs-path "/" (if (string? tpl) tpl (:in tpl)))
-                      out-file (str abs-path "/" (if (string? tpl) (str/replace tpl ".template" "") (:out tpl)))]
-                  (if (io/exists? in-file)
-                    (let [content (io/read-file in-file)
-                          name (or (:name dep-cfg) "unknown")
-                          version (or (:version dep-cfg) "unknown")
-                          res1 (str/replace content "${name}" name)
-                          res2 (str/replace res1 "${version}" version)]
-                      (io/make-parents out-file)
-                      (io/write-file out-file res2)))
-                  (recur (rest rem)))))))
-        ; 3. Compile sources
-        (let [src-dirs (or (:src-dirs dep-cfg) (if (io/exists? (str abs-path "/src/main/java")) ["src/main/java"] ["src/main"]))
-              cp-str   (get-classpath-jars dep-cfg abs-path)
-              cp-arg   (if (not (= cp-str "")) (str " -cp " (io/quote-path cp-str)) "")
-              java-files (loop [rem src-dirs acc []]
-                           (if (empty? rem) acc
-                             (recur (rest rem) (concat acc (io/find-files (str abs-path "/" (first rem)) ".java")))))
-              files-arg (str/join " " java-files)]
-          (io/mkdir-p (str abs-path "/classes"))
-          (if (> (count java-files) 0)
-            (let [cmd (str (java/get-java-bin dep-cfg "javac") " -d " (io/quote-path (str abs-path "/classes")) " " cp-arg " " files-arg)
-                  res (shell/sh cmd)]
-              (if (not (= 0 (:code res)))
-                (do
-                  (log/error (str "Dependency compilation failed for: " dep-name))
-                  (println (:stderr res))
-                  (sys-exit 1))))))
-        ; 4. Package jar
-        (io/mkdir-p (str abs-path "/std-classes"))
-        (io/mkdir-p (str abs-path "/target"))
-        (if (io/exists? (str abs-path "/classes"))
-          (io/copy-dir (str abs-path "/classes") (str abs-path "/std-classes")))
-        (let [res-dir (or (:resource-dir dep-cfg) (str abs-path "/src/main/resources"))]
-          (if (io/exists? res-dir)
-            (io/copy-dir res-dir (str abs-path "/std-classes"))))
-        (io/write-file (str abs-path "/Manifest.txt") (str "Manifest-Version: 1.0\nMain-Class: " (or (:main-class dep-cfg) "Main") "\n"))
-        (let [cmd (str (java/get-java-bin dep-cfg "jar") " cfm " (io/quote-path jar-file) " " (io/quote-path (str abs-path "/Manifest.txt")) " -C " (io/quote-path (str abs-path "/std-classes")) " .")
-              res (shell/sh cmd)]
-          (if (not (= 0 (:code res)))
-            (do
-              (log/error (str "Dependency jar packaging failed for: " dep-name))
-              (println (:stderr res))
-              (sys-exit 1))))))))
+                   {})]
+    (jars/build-dep-jar abs-path dep-cfg)))
+
 
 
 
@@ -220,26 +130,15 @@
                   (log/info (str "Resolving local dependency at " lpath "..."))
                   (build-dep-jar abs-path)
                   (log/info (str "Linking/Copying local dependency jar from " lpath "..."))
-                  (link-or-copy-jars (str abs-path "/target") "libs")
-                  (link-or-copy-jars (str abs-path "/libs") "libs"))))
+                  (jars/link-or-copy-jars (str abs-path "/target") "libs")
+                  (jars/link-or-copy-jars (str abs-path "/libs") "libs"))))
             (recur (rest rem))))))))
 
 
 
 
 (defn get-classpath-jars [config base-path]
-  (let [libs-dir (if (= base-path ".") "libs" (str base-path "/libs"))
-        local-jars (if (io/exists? libs-dir)
-                     (let [all-files (io/file-seq libs-dir)]
-                       (filter (fn [f] (and (str/ends-with? f ".jar") (io/file? f))) all-files))
-                     [])
-        maven-jars (if (:dependencies config)
-                     (maven/resolve-deps (:dependencies config) (or (:repositories config) ["https://repo1.maven.org/maven2"]))
-                     [])]
-    (loop [rem maven-jars acc (to-vec local-jars)]
-      (if (empty? rem)
-        (str/join io/classpath-separator acc)
-        (recur (rest rem) (conj acc (first rem)))))))
+  (jars/get-classpath-jars config base-path))
 
 (defn exec-classpath [config]
   (println (get-classpath-jars config ".")))
