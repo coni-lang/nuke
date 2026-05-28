@@ -6,6 +6,7 @@ Nuke is a fast, lightweight, and extensible build tool for Java projects, config
 - **EDN Configuration**: Define your project metadata, dependencies, and custom tasks in a simple `nuke.edn` file.
 - **Dependency Management**: Automatically downloads dependencies from Maven Central or resolves them from local Nuke projects.
 - **Built-in Tasks**: Standard build lifecycle out of the box (`clean`, `compile`, `test`, `run`, `jar`, `uberjar`, `zip`, `upload`, `build`).
+- **Static Analysis & Metrics (New)**: First-class integration with JaCoCo (Coverage), SpotBugs, PMD, Checkstyle, Error Prone, and SonarQube. Automatically stitches results into a beautiful unified HTML dashboard!
 - **Custom Tasks**: Easily define custom tasks in `nuke.edn` that can execute bash commands, run Coni scripts, or extend existing built-in tasks.
 - **IDE Support**: Comes with an IntelliJ IDEA plugin for seamless integration, task execution, and classpath synchronization.
 - **Native Templating**: Inject build variables into source files automatically via the `:templates` configuration.
@@ -21,12 +22,13 @@ In your project root, run `nuke <task>`. If no task is provided, `nuke build` is
 
 ### Common Commands
 
-- `nuke compile` - Compile Java source files
+- `nuke compile` - Compile Java source files (runs Error Prone if enabled)
 - `nuke test` - Run JUnit tests
+- `nuke metrics` - Run tests with JaCoCo agent and generate coverage reports
+- `nuke analyze` - Run full static analysis (SpotBugs, PMD, Checkstyle) and generate the unified `nuke-analysis.html` dashboard
 - `nuke run` - Run the Java application (requires `:main-class`)
 - `nuke jar` - Create a standard thin jar
 - `nuke uberjar` - Create an executable fat jar
-- `nuke zip` - Create a distribution zip
 - `nuke upload` - Upload the jar and POM to a Nexus repository
 - `nuke tasks` - List all available tasks
 - `nuke info` - Display project metadata
@@ -47,6 +49,11 @@ The build configuration is stored in `nuke.edn` in the root of your project.
  :javac-opts ["-parameters"]
  :encoding "UTF-8"
  :templates ["src/main/resources/config.txt.template"]
+ :analysis {:jacoco {:version "0.8.12"}
+            :error-prone {:enabled true}
+            :sonarqube {:version "5.0.1.3006"
+                        :host "https://sonar.example.com"
+                        :token "sqp_xxx"}}
  :tasks {:custom-jar {:extends "jar"
                       :jar-name "out/my-app-custom.jar"
                       :desc "Creates a standard jar directly after compile, with a custom name"}
@@ -64,6 +71,7 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:repositories` - List of Maven repository URLs.
 - `:dependencies` - List of Maven coordinates in the format `"group:artifact:version"`.
 - `:local-dependencies` - List of local Nuke projects to build and link.
+- `:analysis` - (New) Configuration block for JaCoCo, Error Prone, SonarQube, PMD, SpotBugs, and Checkstyle.
 - `:templates` - List of template files to process (variables like `${name}` and `${version}` will be replaced, and the `.template` extension will be stripped from the output).
 - `:main-class` - Fully qualified class name to execute with `nuke run` or to embed in Jar manifests.
 - `:java-home` - Optional override for `$JAVA_HOME`.
