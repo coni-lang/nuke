@@ -4,6 +4,7 @@
 (require "libs/edn/src/edn.coni" :as edn)
 (require "libs/os/src/log.coni" :as log)
 (require "libs/maven/src/maven.coni" :as maven)
+(require "../libs/java/src/core.coni" :as java)
 
 (def nuke-version "1.0.1")
 (def nuke-build-time "DEV")
@@ -165,14 +166,14 @@
         ; 3. Compile sources
         (let [src-dirs (or (:src-dirs dep-cfg) (if (io/exists? (str abs-path "/src/main/java")) ["src/main/java"] ["src/main"]))
               cp-str   (get-classpath-jars dep-cfg abs-path)
-              cp-arg   (if (not (= cp-str "")) (str " -cp \"" cp-str "\"") "")
+              cp-arg   (if (not (= cp-str "")) (str " -cp " (io/quote-path cp-str)) "")
               java-files (loop [rem src-dirs acc []]
                            (if (empty? rem) acc
                              (recur (rest rem) (concat acc (io/find-files (str abs-path "/" (first rem)) ".java")))))
               files-arg (str/join " " java-files)]
           (io/mkdir-p (str abs-path "/classes"))
           (if (> (count java-files) 0)
-            (let [cmd (str (get-java-bin dep-cfg "javac") " -d \"" abs-path "/classes\" " cp-arg " " files-arg)
+            (let [cmd (str (java/get-java-bin dep-cfg "javac") " -d " (io/quote-path (str abs-path "/classes")) " " cp-arg " " files-arg)
                   res (shell/sh cmd)]
               (if (not (= 0 (:code res)))
                 (do
@@ -188,7 +189,7 @@
           (if (io/exists? res-dir)
             (io/copy-dir res-dir (str abs-path "/std-classes"))))
         (io/write-file (str abs-path "/Manifest.txt") (str "Manifest-Version: 1.0\nMain-Class: " (or (:main-class dep-cfg) "Main") "\n"))
-        (let [cmd (str (get-java-bin dep-cfg "jar") " cfm \"" jar-file "\" \"" abs-path "/Manifest.txt\" -C \"" abs-path "/std-classes\" .")
+        (let [cmd (str (java/get-java-bin dep-cfg "jar") " cfm " (io/quote-path jar-file) " " (io/quote-path (str abs-path "/Manifest.txt")) " -C " (io/quote-path (str abs-path "/std-classes")) " .")
               res (shell/sh cmd)]
           (if (not (= 0 (:code res)))
             (do
@@ -224,18 +225,7 @@
             (recur (rest rem))))))))
 
 
-(defn get-java-bin [config bin-name]
-  (let [conf-home (:java-home config)]
-    (if conf-home
-      (let [raw-path (str conf-home "/bin/" bin-name)
-            path (if (= (sys-os-name) "windows") (str/replace raw-path "/" "\\") raw-path)]
-        (str "\"" path "\""))
-      (let [env-home (sys-env-get "JAVA_HOME")]
-        (if (and env-home (not (= env-home "")))
-          (let [raw-path (str (str/trim env-home) "/bin/" bin-name)
-                path (if (= (sys-os-name) "windows") (str/replace raw-path "/" "\\") raw-path)]
-            (str "\"" path "\""))
-          bin-name)))))
+
 
 (defn get-classpath-jars [config base-path]
   (let [libs-dir (if (= base-path ".") "libs" (str base-path "/libs"))
@@ -265,11 +255,11 @@
           (do
             (log/step "Compiling Java files...")
             (let [cp-jars (get-classpath-jars config ".")
-                  cp-arg (if (empty? cp-jars) "" (str "-cp \"" cp-jars "\""))
+                  cp-arg (if (empty? cp-jars) "" (str "-cp " (io/quote-path cp-jars)))
                   encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
                   opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
                   files-arg (str/join " " java-files)
-                  cmd (str (get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " opts-arg " " files-arg)]
+                  cmd (str (java/get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " opts-arg " " files-arg)]
               (log/info (str "Running javac: " cmd))
               (let [res (shell/sh cmd)]
                 (if (not (= 0 (:code res)))
@@ -314,7 +304,7 @@
         default-jar (str "target/" app-name "-" app-version suffix out-suffix)
         jar-name (or (:jar-name config) default-jar)]
     (io/make-parents jar-name)
-    (let [cmd (str (get-java-bin config "jar") " cfm \"" jar-name "\" Manifest.txt -C " classes-dir " .")]
+    (let [cmd (str (java/get-java-bin config "jar") " cfm " (io/quote-path jar-name) " Manifest.txt -C " classes-dir " .")]
       (log/info (str "Running: " cmd))
       (let [res (shell/sh cmd)]
         (if (not (= 0 (:code res)))
@@ -374,9 +364,9 @@
                 (do
                   (log/step "Running tests...")
                   (let [cp-jars (get-classpath-jars config ".")
-                        cp-arg (str "-cp \"classes" io/classpath-separator "test-classes" (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)) "\"")
+                        cp-arg (str "-cp " (io/quote-path (str "classes" io/classpath-separator "test-classes" (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))))
                         files-arg (str/join " " java-files)
-                        cmd (str (get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
+                        cmd (str (java/get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
                     (log/info "Compiling tests...")
                     (let [res (shell/sh cmd)]
                       (if (not (= 0 (:code res)))
@@ -387,6 +377,7 @@
                         (let [test-classes (find-test-classes test-dir)]
                           (if (not (empty? test-classes))
                             (let [use-junit5 (str/includes? cp-jars "junit-platform-console")
+                                  jvm-opts (if (:test-jvm-opts config) (str " " (str/join " " (:test-jvm-opts config))) "")
                                   test-cmd (if use-junit5
                                              (let [junit5-args (let [classes (str/split test-classes "\n")]
                                                                  (loop [rem classes acc []]
@@ -396,8 +387,8 @@
                                                                        (if (empty? c)
                                                                          (recur (rest rem) acc)
                                                                          (recur (rest rem) (conj acc (str "--select-class=" c))))))))]
-                                               (str (get-java-bin config "java") " " cp-arg " org.junit.platform.console.ConsoleLauncher " junit5-args))
-                                             (str (get-java-bin config "java") " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " ")))]
+                                               (str (java/get-java-bin config "java") jvm-opts " " cp-arg " org.junit.platform.console.ConsoleLauncher " junit5-args))
+                                             (str (java/get-java-bin config "java") jvm-opts " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " ")))]
                               (let [test-res (shell/sh test-cmd)]
                                 (io/mkdir-p "target")
                                 (io/write-file "target/test-report.txt" (:stdout test-res))
@@ -425,8 +416,8 @@
         (log/step (str "Running " main-class "..."))
         (let [cp-jars (get-classpath-jars config ".")
               res-dir (or (:resource-dir config) "src/main/resources")
-              cp-arg (str "-cp \"classes" (if (io/exists? res-dir) (str io/classpath-separator res-dir) "") (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)) "\"")
-              cmd (str (get-java-bin config "java") " " cp-arg " " main-class)]
+              cp-arg (str "-cp " (io/quote-path (str "classes" (if (io/exists? res-dir) (str io/classpath-separator res-dir) "") (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))))
+              cmd (str (java/get-java-bin config "java") " " cp-arg " " main-class)]
           (let [res (shell/sh cmd)]
             (if (not (= 0 (:code res)))
               (do
@@ -466,7 +457,7 @@
                                (not (= env-pass "")) env-pass
                                m2-creds (:password m2-creds)
                                :else "lpwesab8")
-                        cmd (str "curl -sS -f -u " user ":" pass " -X POST \"" url "\""
+                        cmd (str "curl -sS -f -u " user ":" pass " -X POST " (io/quote-path url)
                              " -F maven2.groupId=" group-id
                              " -F maven2.artifactId=" app-name
                              " -F maven2.version=" app-version
@@ -669,7 +660,18 @@
         cmd (get-cmd args)
         config-file (if (io/exists? "nuke.edn") "nuke.edn" nil)
         config-content (if config-file (io/read-file config-file) nil)
-        config (if config-content (edn/parse-edn config-content) {})]
+        raw-config (if config-content (edn/parse-edn config-content) {})
+        cov-cfg (:coverage raw-config)
+        config (let [jacoco-v (or (:version (:jacoco cov-cfg)) "0.8.11")
+                     agent-dest (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")
+                     base-opts (or (:test-jvm-opts raw-config) [])
+                     cov-opts (conj base-opts (io/quote-path (str "-javaagent:" agent-dest "=destfile=target/jacoco.exec")))
+                     base-tasks (or (:tasks raw-config) {})
+                     new-tasks (assoc (assoc (assoc base-tasks
+                                 :prepare-metrics {:desc "Download Jacoco agent" :coni "(require \"../libs/java/src/metrics.coni\" :as m) (m/download-jacoco @global-task-config)"})
+                                 :test-cov {:extends "test" :deps [:compile :prepare-metrics] :test-jvm-opts cov-opts})
+                                 :metrics {:desc "Run the Java metrics toolkit" :deps [:test-cov] :coni "(require \"../libs/java/src/metrics.coni\" :as m) (m/run-all-metrics @global-task-config)"})]
+                 (assoc raw-config :tasks new-tasks))]
     (load-custom-tasks config)
     (cond
       (or (= cmd "-v") (= cmd "-V") (= cmd "--version") (= cmd "version")) (show-version)

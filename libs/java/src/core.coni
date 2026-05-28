@@ -1,0 +1,29 @@
+(require "libs/os/src/io.coni" :as io)
+(require "libs/os/src/shell.coni" :as shell)
+(require "libs/str/src/str.coni" :as str)
+(require "libs/maven/src/maven.coni" :as maven)
+
+(defn download-jar [repos path-suffix dest]
+  (if (not (io/exists? dest))
+    (loop [rem repos]
+      (if (empty? rem)
+        (println (str "❌ Failed to download " dest))
+        (let [repo (first rem)
+              base (if (str/ends-with? repo "/") (str/substring repo 0 (- (count repo) 1)) repo)
+              url (str base "/" path-suffix)]
+          (if (maven/download-url-to-file url dest)
+            true
+            (recur (rest rem))))))))
+
+(defn get-java-bin [config bin-name]
+  (let [conf-home (:java-home config)]
+    (if conf-home
+      (let [raw-path (str conf-home "/bin/" bin-name)
+            path (if (= (sys-os-name) "windows") (str/replace raw-path "/" "\\") raw-path)]
+        (io/quote-path path))
+      (let [env-home (sys-env-get "JAVA_HOME")]
+        (if (and env-home (not (= env-home "")))
+          (let [raw-path (str (str/trim env-home) "/bin/" bin-name)
+                path (if (= (sys-os-name) "windows") (str/replace raw-path "/" "\\") raw-path)]
+            (io/quote-path path))
+          bin-name)))))

@@ -1,0 +1,154 @@
+(require "libs/os/src/io.coni" :as io)
+(require "libs/os/src/shell.coni" :as shell)
+(require "libs/str/src/str.coni" :as str)
+(require "libs/maven/src/maven.coni" :as maven)
+(require "../libs/java/src/core.coni" :as java-core)
+
+(defn download-jacoco [config]
+  (let [cov-cfg (:coverage config)
+        jacoco-v (or (:version (:jacoco cov-cfg)) "0.8.11")
+        repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
+        agent-dest (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")
+        cli-dest (maven/coord-to-m2-path "org.jacoco" "org.jacoco.cli" jacoco-v "nodeps.jar")
+        agent-dest-f (str/replace agent-dest "\\" "/")
+        cli-dest-f (str/replace cli-dest "\\" "/")
+        agent-dir (str/substring agent-dest 0 (+ 1 (str/last-index-of agent-dest-f "/")))
+        cli-dir (str/substring cli-dest 0 (+ 1 (str/last-index-of cli-dest-f "/")))]
+    (io/mkdir-p agent-dir)
+    (io/mkdir-p cli-dir)
+    (if (not (io/exists? agent-dest))
+      (do
+        (println "Downloading jacocoagent.jar...")
+        (java-core/download-jar repos (str "org/jacoco/org.jacoco.agent/" jacoco-v "/org.jacoco.agent-" jacoco-v "-runtime.jar") agent-dest)))
+    (if (not (io/exists? cli-dest))
+      (do
+        (println "Downloading jacococli.jar...")
+        (java-core/download-jar repos (str "org/jacoco/org.jacoco.cli/" jacoco-v "/org.jacoco.cli-" jacoco-v "-nodeps.jar") cli-dest)))))
+
+(defn calculate-ratio [config]
+  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        test-dir (or (:test-dir config) (if (io/exists? "src/test/java") "src/test/java" "src/tests"))
+        src-files (if (io/exists? src-dir) (io/find-files src-dir ".java") [])
+        test-files (if (io/exists? test-dir) (io/find-files test-dir ".java") [])]
+    (let [src-lines (loop [rem src-files total 0]
+                      (if (empty? rem) total
+                        (let [content (io/read-file (first rem))
+                              lines (str/split content "\n")
+                              non-empty (count (filter (fn [l] (not (empty? (str/trim l)))) lines))]
+                          (recur (rest rem) (+ total non-empty)))))
+          test-lines (loop [rem test-files total 0]
+                       (if (empty? rem) total
+                         (let [content (io/read-file (first rem))
+                               lines (str/split content "\n")
+                               non-empty (count (filter (fn [l] (not (empty? (str/trim l)))) lines))]
+                           (recur (rest rem) (+ total non-empty)))))]
+      (println "\n=== Code to Test Ratio ===")
+      (println (str "Source lines: " src-lines))
+      (println (str "Test lines:   " test-lines))
+      (if (> src-lines 0)
+        (println (str "Ratio (Test/Src): " test-lines "/" src-lines))
+        (println "Ratio (Test/Src): N/A")))))
+
+(defn parse-test-time []
+  (if (io/exists? "target/test-report.txt")
+    (let [content (io/read-file "target/test-report.txt")
+          lines (str/split content "\n")]
+      (println "\n=== Test Execution Time ===")
+      (let [j5-time (first (filter (fn [l] (str/includes? l "Test run finished after")) lines))
+            j4-time (first (filter (fn [l] (str/starts-with? l "Time: ")) lines))]
+        (if j5-time
+          (println (str "⏱️  " (str/trim j5-time)))
+          (if j4-time
+            (println (str "⏱️  " (str/trim j4-time) " seconds"))
+            (println "⚠️  Execution time not found in report.")))))
+    (println "\n=== Test Execution Time ===")
+    (println "⚠️  No test report found.")))
+
+(defn generate-nuke-html-report [total-missed total-covered rows]
+  (let [total (+ total-missed total-covered)
+        pct (if (> total 0) (/ (* total-covered 100) total) 0)
+        color (if (>= pct 80) "#10B981" (if (>= pct 50) "#F59E0B" "#EF4444"))
+        table-rows (loop [rem rows acc ""]
+                     (if (empty? rem) acc
+                       (let [row (first rem)
+                             c-name (:class row)
+                             cm (:missed row)
+                             cc (:covered row)
+                             ctotal (+ cm cc)
+                             cpct (if (> ctotal 0) (/ (* cc 100) ctotal) 0)
+                             ccolor (if (>= cpct 80) "#10B981" (if (>= cpct 50) "#F59E0B" "#EF4444"))]
+                         (recur (rest rem) (str acc "<tr class='hover-bg'><td class='p-3'>" c-name "</td><td class='p-3'><div class='progress-bar-bg'><div class='progress-bar-fill' style='width: " cpct "%; background-color: " ccolor "'></div></div></td><td class='p-3 font-bold' style='color: " ccolor "'>" cpct "%</td></tr>")))))]
+    (io/write-file "target/nuke-coverage.html" 
+      (str "<!DOCTYPE html>\n<html lang='en'>\n<head>\n  <meta charset='UTF-8'>\n  <title>Nuke Coverage Report</title>\n  <link href='https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap' rel='stylesheet'>\n  <style>\n    body { font-family: 'Outfit', sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #f8fafc; margin: 0; padding: 40px; min-height: 100vh; }\n    .container { max-width: 900px; margin: 0 auto; }\n    h1 { font-weight: 700; font-size: 2.5rem; margin-bottom: 0.5rem; text-shadow: 0 4px 10px rgba(0,0,0,0.5); }\n    .glass-card { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 30px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); margin-bottom: 30px; transition: transform 0.3s ease; }\n    .glass-card:hover { transform: translateY(-5px); }\n    .metric-value { font-size: 4rem; font-weight: 700; background: linear-gradient(90deg, " color " 0%, #ffffff 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }\n    .progress-bar-bg { width: 100%; height: 12px; background: rgba(0,0,0,0.3); border-radius: 10px; overflow: hidden; margin-top: 15px; }\n    .progress-bar-fill { height: 100%; border-radius: 10px; transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }\n    table { width: 100%; border-collapse: collapse; margin-top: 20px; }\n    th { text-align: left; padding: 12px; border-bottom: 2px solid rgba(255,255,255,0.1); font-weight: 500; color: #cbd5e1; }\n    td { border-bottom: 1px solid rgba(255,255,255,0.05); }\n    .hover-bg { transition: background 0.2s ease; }\n    .hover-bg:hover { background: rgba(255,255,255,0.03); }\n    @keyframes fade-in { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }\n    .animate { animation: fade-in 0.8s ease forwards; }\n  </style>\n</head>\n<body>\n  <div class='container animate'>\n    <h1>✨ Code Coverage</h1>\n    <p style='color: #94a3b8; font-size: 1.2rem; margin-bottom: 40px;'>Generated by Nuke Build System</p>\n    \n    <div class='glass-card'>\n      <div style='color: #94a3b8; text-transform: uppercase; letter-spacing: 2px; font-size: 0.9rem;'>Total Instruction Coverage</div>\n      <div class='metric-value'>" pct "%</div>\n      <div class='progress-bar-bg'>\n        <div class='progress-bar-fill' style='width: " pct "%; background-color: " color "'></div>\n      </div>\n      <div style='margin-top: 10px; color: #cbd5e1;'>" total-covered " of " total " instructions covered</div>\n    </div>\n\n    <div class='glass-card' style='animation-delay: 0.2s;'>\n      <h2 style='margin-top: 0; margin-bottom: 20px; font-weight: 500;'>Class Breakdown</h2>\n      <table>\n        <thead>\n          <tr>\n            <th style='width: 40%;'>Class</th>\n            <th style='width: 40%;'>Coverage</th>\n            <th style='width: 20%;'>%</th>\n          </tr>\n        </thead>\n        <tbody>\n          " table-rows "\n        </tbody>\n      </table>\n    </div>\n  </div>\n</body>\n</html>"))))
+
+
+
+(defn report-coverage [config]
+  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        classes-dir "classes"
+        cov-cfg (:coverage config)
+        jacoco-v (or (:version (:jacoco cov-cfg)) "0.8.11")
+        cli-dest (maven/coord-to-m2-path "org.jacoco" "org.jacoco.cli" jacoco-v "nodeps.jar")
+        java-cmd (java-core/get-java-bin config "java")]
+    (if (io/exists? "target/jacoco.exec")
+      (do
+        (println "\n=== Code Coverage ===")
+        (let [cmd (str java-cmd " -jar " (io/quote-path cli-dest) " report target/jacoco.exec "
+                       "--classfiles " (io/quote-path classes-dir) " "
+                       "--sourcefiles " (io/quote-path src-dir) " "
+                       "--html target/jacoco-classic-report "
+                       "--xml target/jacoco.xml "
+                       "--csv target/jacoco.csv")
+              res (shell/sh cmd)]
+          (if (= 0 (:code res))
+            (do
+              (println "✅ Raw reports generated: target/jacoco.csv, target/jacoco.xml")
+              (println "✅ Classic report generated: target/jacoco-classic-report/index.html")
+              (if (io/exists? "target/jacoco.csv")
+                (let [csv (io/read-file "target/jacoco.csv")
+                      lines (str/split csv "\n")]
+                  (if (> (count lines) 1)
+                    (loop [rem (rest lines) inst-missed 0 inst-covered 0 rows []]
+                      (if (empty? rem)
+                        (let [total (+ inst-missed inst-covered)]
+                          (generate-nuke-html-report inst-missed inst-covered rows)
+                          (println "✨ Nuke custom report generated: target/nuke-coverage.html")
+                          (if (> total 0)
+                            (let [pct (/ (* inst-covered 100) total)]
+                              (println (str "Instruction Coverage: " inst-covered "/" total " (" pct "%)")))
+                            (println "No instructions found.")))
+                        (let [line (str/trim (first rem))]
+                          (if (or (empty? line) (str/includes? line "INSTRUCTION"))
+                            (recur (rest rem) inst-missed inst-covered rows)
+                            (let [parts (str/split line ",")
+                                  c-name (if (> (count parts) 2) (get parts 2) "Unknown")
+                                  m (if (> (count parts) 3) (str/parse-float (get parts 3)) 0)
+                                  c (if (> (count parts) 4) (str/parse-float (get parts 4)) 0)
+                                  new-rows (conj rows {:class c-name :missed m :covered c})]
+                              (recur (rest rem) (+ inst-missed m) (+ inst-covered c) new-rows))))))))))
+            (do
+              (println "❌ Failed to generate coverage report.")
+              (println (:stderr res))))))
+      (do
+        (println "\n=== Code Coverage ===")
+        (println "⚠️ target/jacoco.exec not found. Did you run tests with the javaagent?")))))
+
+(defn run-custom-metrics [config]
+  (let [custom (or (:custom-metrics config) [])]
+    (if (> (count custom) 0)
+      (do
+        (println "\n=== Custom Metrics ===")
+        (loop [rem custom]
+          (if (not (empty? rem))
+            (let [metric (first rem)
+                  name (:name metric)
+                  code (:coni metric)]
+              (println (str "Running: " name " ..."))
+              (eval-string code)
+              (recur (rest rem)))))))))
+
+(defn run-all-metrics [config]
+  (calculate-ratio config)
+  (parse-test-time)
+  (report-coverage config)
+  (run-custom-metrics config))
