@@ -201,11 +201,11 @@
   (log/info "Copying resources...")
   (let [res-dir (or (:resource-dir config) "src/main/resources")]
     (io/copy-dir-contents res-dir classes-dir))
-  (log/info "Writing Manifest...")
   (let [main-class (:main-class config)]
     (if main-class
-      (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))
-      (io/write-file "Manifest.txt" ""))))
+      (do
+        (log/info "Writing Manifest...")
+        (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))))))
 
 (defn build-jar [config task-id classes-dir out-suffix]
   (let [app-version (or (:version config) "1.0.0")
@@ -213,9 +213,12 @@
         tname (:task-name config)
         suffix (if (and tname (not (= tname task-id))) (str "-" tname) "")
         default-jar (str "target/" app-name "-" app-version suffix out-suffix)
-        jar-name (or (:jar-name config) default-jar)]
+        jar-name (or (:jar-name config) default-jar)
+        main-class (:main-class config)]
     (io/make-parents jar-name)
-    (let [cmd (str (java/get-java-bin config "jar") " cfm " (io/quote-path jar-name) " Manifest.txt -C " classes-dir " .")]
+    (let [cmd (if main-class
+                (str (java/get-java-bin config "jar") " cfm " (io/quote-path jar-name) " Manifest.txt -C " classes-dir " .")
+                (str (java/get-java-bin config "jar") " cf " (io/quote-path jar-name) " -C " classes-dir " ."))]
       (log/info (str "Running: " cmd))
       (let [res (shell/sh cmd)]
         (if (not (= 0 (:code res)))
