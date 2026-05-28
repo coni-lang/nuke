@@ -469,8 +469,10 @@
     (if (not (empty? rem))
       (let [tname (first rem)
             task (get @global-tasks tname)
-            padding (str/repeat " " (- 15 (count tname)))]
-        (println (str "  " tname padding " - " (:desc task)))
+            desc (:desc task)]
+        (if desc
+          (let [padding (str/repeat " " (- 15 (count tname)))]
+            (println (str "  " tname padding " - " desc))))
         (recur (rest rem))))))
 
 (defn show-info [config]
@@ -517,7 +519,7 @@
                                          (str/substring draw 1 (count draw))
                                          draw)]
                              (recur (rest drem) (conj dacc dname))))))
-                desc (or (:desc tinfo) (str "Custom task " tname))
+                desc (:desc tinfo)
                 cmds (or (:cmds tinfo) [])
                 coni-code (:coni tinfo)
                 extends-task-raw (:extends tinfo)
@@ -582,7 +584,7 @@
                      cov-opts (conj base-opts (io/quote-path (str "-javaagent:" agent-dest "=destfile=target/jacoco.exec")))
                      base-tasks (or (:tasks raw-config) {})
                      new-tasks (-> base-tasks
-                                 (assoc :prepare-metrics {:desc "Download Jacoco agent" :coni "(require \"libs/java/src/metrics.coni\" :as m) (m/download-jacoco @global-task-config)"})
+                                 (assoc :prepare-metrics {:coni "(require \"libs/java/src/metrics.coni\" :as m) (m/download-jacoco @global-task-config)"})
                                  (assoc :test-cov {:extends "test" :deps [:compile :prepare-metrics] :test-jvm-opts cov-opts})
                                  (assoc :metrics {:desc "Run the Java metrics toolkit" :deps [:test-cov] :coni "(require \"libs/java/src/metrics.coni\" :as m) (m/run-all-metrics @global-task-config)"})
                                  (assoc :spotbugs {:desc "Run SpotBugs static analysis" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-spotbugs @global-task-config)"})
