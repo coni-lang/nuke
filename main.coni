@@ -589,7 +589,7 @@
                                  (assoc :pmd {:desc "Run PMD static analysis" :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-pmd @global-task-config)"})
                                  (assoc :checkstyle {:desc "Run Checkstyle analysis" :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-checkstyle @global-task-config)"})
                                  (assoc :sonarqube {:desc "Run SonarQube Scanner" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-sonarqube @global-task-config)"})
-                                 (assoc :analyze {:desc "Run all static analysis tools" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-all-analysis @global-task-config)"}))]
+                                 (assoc :analyze {:desc "Run all static analysis tools" :deps [:compile :metrics] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-all-analysis @global-task-config)"}))]
                  (assoc raw-config :tasks new-tasks))]
     (load-custom-tasks config)
     (cond
