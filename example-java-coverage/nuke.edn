@@ -1,4 +1,6 @@
 {:name "example-java-coverage"
  :version "1.0.0"
  :dependencies ["junit:junit:4.13.2"]
- :coverage {:jacoco {:version "0.8.12"}}}
+ :analysis {:jacoco {:version "0.8.12"}
+            :error-prone {:enabled true}}}
+ :tasks {:os {:coni "(println (sys-os-name))"}}
