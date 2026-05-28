@@ -122,3 +122,23 @@ Nuke provides a dedicated IntelliJ IDEA plugin. You can install it from the `nuk
 ## Under the Hood
 
 Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`, `javac`, `jar`, `java`, `zip`, `find`) to keep the build extremely fast and minimal without spinning up a heavy JVM daemon for the build logic itself.
+
+## Version History
+
+### v1.1.0 (Latest)
+- **Static Analysis Dashboard**: Introduced the `nuke analyze` command to generate a unified `nuke-analysis.html` static analysis dashboard.
+- **JaCoCo Coverage**: Added the `nuke metrics` and `nuke test-cov` commands to compute test coverage dynamically and inject it into the dashboard.
+- **Error Prone**: Integrated Google's Error Prone directly into the `javac` compile step (enabled via `:error-prone {:enabled true}`).
+- **SonarQube CLI**: Integrated seamless SonarScanner execution via the new `nuke sonarqube` task.
+- **SpotBugs & PMD**: Bundled static analysis checks that automatically run during `analyze`.
+- **Checkstyle**: Introduced unified style checking linked to the dashboard.
+- **Nexus IQ**: Added support for detecting and displaying Nexus IQ dependency vulnerabilities in the static analysis dashboard.
+- Fixed `uberjar` manifest generation when no `:main-class` is provided.
+
+### v1.0.1
+- Integrated basic Nuke build templating via `:templates`.
+- Ignored `resources/bin` during standard Git tracking.
+
+### v1.0.0
+- Initial open-source release of the Nuke Build Tool.
+- Features EDN configuration, built-in Java build tasks, Maven dependency resolution, and custom Coni script tasks.

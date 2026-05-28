@@ -7,7 +7,7 @@
 (require "libs/java/src/core.coni" :as java)
 (require "libs/java/src/jars.coni" :as jars)
 
-(def nuke-version "1.0.1")
+(def nuke-version "1.1.0")
 (def nuke-build-time "DEV")
 (def nuke-commit "DEV")
 (def nuke-commit-msg "DEV")
