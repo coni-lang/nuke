@@ -1,0 +1,5 @@
+{:name "example-java-consumer"
+ :version "1.0.0"
+ :repositories ["http://nexus.klabs.home/repository/maven-releases/"]
+ :dependencies ["home.klabs:my-app:1.3.0"]
+ :main-class "home.klabs.consumer.App"}

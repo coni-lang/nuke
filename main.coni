@@ -182,59 +182,57 @@
           (log/warn "No java files found. Skipping compilation.")))
       (log/success "Source files unchanged. Skipping compilation."))))
 
-(defn prep-jar [config step-msg classes-dir is-uberjar]
-  (log/step step-msg)
-  (io/mkdir-p "target")
-  (io/mkdir-p classes-dir)
-  (if is-uberjar
-    (do
-      (log/info "Unzipping dependency jars...")
-      (let [cp-jars (get-classpath-jars config ".")
-            jars (filter (fn [x] (not (empty? x))) (str/split cp-jars io/classpath-separator))]
-        (loop [rem-jars jars]
-          (if (not (empty? rem-jars))
-            (do
-              (io/unzip (first rem-jars) classes-dir)
-              (recur (rest rem-jars))))))))
-  (log/info "Copying compiled classes...")
-  (io/copy-dir-contents "classes" classes-dir)
-  (log/info "Copying resources...")
-  (let [res-dir (or (:resource-dir config) "src/main/resources")]
-    (io/copy-dir-contents res-dir classes-dir))
-  (let [main-class (:main-class config)]
-    (if main-class
+(defn build-jar [config step-msg task-id classes-dir out-suffix is-uberjar]
+  (let [dummy "init"]
+    (log/step step-msg)
+    (io/mkdir-p "target")
+    (io/mkdir-p classes-dir)
+    (if is-uberjar
       (do
-        (log/info "Writing Manifest...")
-        (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))))))
-
-(defn build-jar [config task-id classes-dir out-suffix]
-  (let [app-version (or (:version config) "1.0.0")
-        app-name (or (:name config) "app")
-        tname (:task-name config)
-        suffix (if (and tname (not (= tname task-id))) (str "-" tname) "")
-        default-jar (str "target/" app-name "-" app-version suffix out-suffix)
-        jar-name (or (:jar-name config) default-jar)
-        main-class (:main-class config)]
-    (io/make-parents jar-name)
-    (let [cmd (if main-class
-                (str (java/get-java-bin config "jar") " cfm " (io/quote-path jar-name) " Manifest.txt -C " classes-dir " .")
-                (str (java/get-java-bin config "jar") " cf " (io/quote-path jar-name) " -C " classes-dir " ."))]
-      (log/info (str "Running: " cmd))
-      (let [res (shell/sh cmd)]
-        (if (not (= 0 (:code res)))
-          (do
-            (log/error "Jar creation failed!")
-            (println (:stderr res))
-            (sys-exit 1))
-          (log/success (str "Successfully created " jar-name)))))))
+        (log/info "Unzipping dependency jars...")
+        (let [cp-jars (get-classpath-jars config ".")
+              jars (filter (fn [x] (not (empty? x))) (str/split cp-jars io/classpath-separator))]
+          (loop [rem-jars jars]
+            (if (not (empty? rem-jars))
+              (do
+                (io/unzip (first rem-jars) classes-dir)
+                (recur (rest rem-jars)))))))
+      nil)
+    (if (io/exists? "classes")
+      (io/copy-dir-contents "classes" classes-dir)
+      nil)
+    (let [res-dir (or (:resource-dir config) "src/main/resources")]
+      (if (io/exists? res-dir)
+        (io/copy-dir-contents res-dir classes-dir)
+        nil))
+    (let [app-version (or (:version config) "1.0.0")
+          app-name (or (:name config) "app")
+          tname (:task-name config)
+          suffix (if (and tname (not (= tname task-id))) (str "-" tname) "")
+          default-jar (str "target/" app-name "-" app-version suffix out-suffix)
+          jar-name (or (:jar-name config) default-jar)
+          main-class (:main-class config)]
+      (io/make-parents jar-name)
+      (if main-class
+        (io/write-file "Manifest.txt" (str "Main-Class: " main-class "\n"))
+        nil)
+      (let [cmd (if main-class
+                  (str (java/get-java-bin config "jar") " cfm " (io/quote-path jar-name) " Manifest.txt -C " classes-dir " .")
+                  (str (java/get-java-bin config "jar") " cf " (io/quote-path jar-name) " -C " classes-dir " ."))]
+        (log/info (str "Running: " cmd))
+        (let [res (shell/sh cmd)]
+          (if (not (= 0 (:code res)))
+            (do
+              (log/error "Jar creation failed!")
+              (println (:stderr res))
+              (sys-exit 1))
+            (log/success (str "Successfully created " jar-name))))))))
 
 (defn exec-jar [config]
-  (prep-jar config "Preparing standard jar..." "std-classes" false)
-  (build-jar config "jar" "std-classes" ".jar"))
+  (build-jar config "Preparing standard jar..." "jar" "std-classes" ".jar" false))
 
 (defn exec-uberjar [config]
-  (prep-jar config "Creating uberjar..." "uber-classes" true)
-  (build-jar config "uberjar" "uber-classes" "-uberjar.jar"))
+  (build-jar config "Creating uberjar..." "uberjar" "uber-classes" "-uberjar.jar" true))
 
 
 (defn generate-pom [config]
@@ -341,51 +339,84 @@
               (if (not (empty? (str/trim (:stdout res))))
                 (println (str/trim (:stdout res)))))))))))
 
+(defn exec-upload-impl [config jar-ext]
+  (let [deploy-url (:deploy config)]
+    (if (nil? deploy-url)
+      (do
+        (log/error "No :deploy URL configured in nuke.edn")
+        (sys-exit 1)))
+    (log/step "Uploading to Nexus...")
+    (let [pom-content (generate-pom config)]
+      (io/write-file "target/pom.xml" pom-content)
+      (let [app-version (or (:version config) "1.0.0")
+            app-name (or (:name config) "app")
+            group-id (or (:group-id config) "com.example")
+            tname (:task-name config)
+            suffix (if (and tname
+                           (not (= tname "upload"))
+                           (not (= tname "upload-uberjar")))
+                     (str "-" tname) "")
+            default-jar (str "target/" app-name "-" app-version suffix jar-ext)
+            jar-name (or (:jar-name config) default-jar)
+            ;; Extract repo name and base URL from :deploy
+            ;; e.g. "http://nexus.klabs.home/repository/maven-releases/" -> repo=maven-releases, base=http://nexus.klabs.home
+            clean-url (if (str/ends-with? deploy-url "/") (str/substring deploy-url 0 (- (count deploy-url) 1)) deploy-url)
+            repo-idx (str/index-of clean-url "/repository/")
+            has-repo (>= repo-idx 0)
+            base-url (if has-repo (str/substring clean-url 0 repo-idx) clean-url)
+            deploy-repo (if has-repo
+                          (str/substring clean-url (+ repo-idx (count "/repository/")) (count clean-url))
+                          nil)
+            url (if has-repo
+                  (str base-url "/service/rest/v1/components?repository=" deploy-repo)
+                  (str clean-url "/service/rest/v1/components"))]
+        (log/info (str "  Jar: " jar-name))
+        (log/info (str "  POM: target/pom.xml"))
+        (log/info (str "  URL: " url))
+        (if (not (io/exists? jar-name))
+          (do
+            (log/error (str "Jar not found: " jar-name))
+            (sys-exit 1)))
+        (let [env-user (sys-env-get "NUKE_DEPLOY_USER")
+              env-pass (sys-env-get "NUKE_DEPLOY_PASSWORD")
+              m2-creds (if (and (= env-user "") (= env-pass "") deploy-repo)
+                         (maven/parse-m2-settings-credentials deploy-repo)
+                         nil)
+              user (cond
+                     (not (= env-user "")) env-user
+                     m2-creds (:username m2-creds)
+                     :else nil)
+              pass (cond
+                     (not (= env-pass "")) env-pass
+                     m2-creds (:password m2-creds)
+                     :else nil)]
+          (if (or (nil? user) (nil? pass))
+            (do
+              (log/error "No deploy credentials found!")
+              (log/info  "  Set NUKE_DEPLOY_USER and NUKE_DEPLOY_PASSWORD env vars,")
+              (log/info  (str "  or add a <server><id>" (or deploy-repo "your-repo") "</id>...</server> to ~/.m2/settings.xml"))
+              (sys-exit 1)))
+          (let [cmd (str "curl -sS -f -u '" user ":" pass "' -X POST " (io/quote-path url)
+                         " -F maven2.groupId=" group-id
+                         " -F maven2.artifactId=" app-name
+                         " -F maven2.version=" app-version
+                         " -F maven2.asset1=@" jar-name
+                         " -F maven2.asset1.extension=jar"
+                         " -F maven2.asset2=@target/pom.xml"
+                         " -F maven2.asset2.extension=pom")]
+            (let [res (shell/sh cmd)]
+              (if (not (= 0 (:code res)))
+                (do
+                  (log/error "Upload failed!")
+                  (println (:stderr res))
+                  (sys-exit 1))
+                (log/success "Successfully uploaded to Nexus!")))))))))
+
 (defn exec-upload [config]
-  (log/step "Uploading to Nexus...")
-  (let [pom-content (generate-pom config)]
-    (io/write-file "target/pom.xml" pom-content)
-    (let [app-version (if (:version config) (:version config) "1.0.0")]
-      (let [app-name (if (:name config) (:name config) "app")]
-        (let [group-id (if (:group-id config) (:group-id config) "com.example")]
-          (let [tname (:task-name config)
-                suffix (if (and tname (not (= tname "upload"))) (str "-" tname) "")
-                default-jar (str "target/" app-name "-" app-version suffix "-uberjar.jar")
-                jar-name (or (:jar-name config) default-jar)]
-            (let [deploy-url (if (:deploy config) (:deploy config) "https://repository.hellonico.info/")]
-              (let [base-url (if (str/ends-with? deploy-url "/") (str/substring deploy-url 0 (- (count deploy-url) 1)) deploy-url)]
-                (let [deploy-repo (or (:deploy-repo config) "maven-releases")]
-                  (let [url (if (str/includes? base-url "/service/rest") 
-                                deploy-url 
-                                (str base-url "/service/rest/v1/components?repository=" deploy-repo))]
-                  (let [env-user (sys-env-get "NUKE_DEPLOY_USER")
-                        env-pass (sys-env-get "NUKE_DEPLOY_PASSWORD")
-                        m2-creds (if (and (= env-user "") (= env-pass ""))
-                                   (maven/parse-m2-settings-credentials deploy-repo)
-                                   nil)
-                        user (cond
-                               (not (= env-user "")) env-user
-                               m2-creds (:username m2-creds)
-                               :else "admin")
-                        pass (cond
-                               (not (= env-pass "")) env-pass
-                               m2-creds (:password m2-creds)
-                               :else "lpwesab8")
-                        cmd (str "curl -sS -f -u " user ":" pass " -X POST " (io/quote-path url)
-                             " -F maven2.groupId=" group-id
-                             " -F maven2.artifactId=" app-name
-                             " -F maven2.version=" app-version
-                             " -F maven2.asset1=@" jar-name
-                             " -F maven2.asset1.extension=jar"
-                             " -F maven2.asset2=@target/pom.xml"
-                             " -F maven2.asset2.extension=pom")]
-                (let [res (shell/sh cmd)]
-                  (if (not (= 0 (:code res)))
-                    (do
-                      (log/error "Upload failed!")
-                      (println (:stderr res))
-                      (sys-exit 1))
-                    (log/success "Successfully uploaded to Nexus!"))))))))))))))
+  (exec-upload-impl config ".jar"))
+
+(defn exec-upload-uberjar [config]
+  (exec-upload-impl config "-uberjar.jar"))
 
 (defn exec-zip [config]
   (let [app-version (or (:version config) "1.0.0")
@@ -443,8 +474,9 @@
 (register-task "jar" ["compile"] "Create a standard thin jar" exec-jar)
 (register-task "uberjar" ["test"] "Create an executable fat jar" exec-uberjar)
 (register-task "zip" ["uberjar"] "Create a distribution zip" exec-zip)
-(register-task "upload" ["zip"] "Upload the jar and POM to Nexus" exec-upload)
-(register-task "build" ["upload"] "Run the full build pipeline" (fn [config] (log/success "Build complete.")))
+(register-task "upload" ["jar"] "Upload the jar and POM to Nexus" exec-upload)
+(register-task "upload-uberjar" ["zip"] "Upload the uberjar and POM to Nexus" exec-upload-uberjar)
+(register-task "build" ["upload-uberjar"] "Run the full build pipeline" (fn [config] (log/success "Build complete.")))
 
 (defn run-task-graph [task-name config completed]
   (if (not (= (get completed task-name :not-found) :not-found))
