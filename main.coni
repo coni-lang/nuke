@@ -542,7 +542,11 @@
                                   (println (str "Error: base task '" extends-task "' not found for task '" tname "'"))
                                   (sys-exit 1)))))
                           (if coni-code
-                            (let [code (if (and (string? coni-code) (io/exists? coni-code))
+                            (let [code (if (and (string? coni-code)
+                                                (str/ends-with? coni-code ".coni")
+                                                (not (str/includes? coni-code "\n"))
+                                                (not (str/includes? coni-code "("))
+                                                (io/exists? coni-code))
                                          (io/read-file coni-code)
                                          coni-code)]
                               (eval-string code)))
