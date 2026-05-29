@@ -10,5 +10,5 @@
    :shell {:cmd "rm -rf dist && mkdir -p dist/nuke/examples && cp nuke nuke.exe nuke-linux main.coni README.md dist/nuke/ && rsync -a --exclude-from=.gitignore --exclude=example-spring-boot example-* dist/nuke/examples/ && cp nuke-intellij-plugin/build/distributions/*.zip dist/nuke/"
            :cwd "."}}
   {:name "Zip Dist"
-   :shell {:cmd "cd dist && zip -r nuke-dist-$(date +%Y-%m-%d).zip nuke"
+   :shell {:cmd "cd dist && zip -r nuke-dist-$(date +%Y-%m-%d_%H-%M).zip nuke"
            :cwd "."}}]}
