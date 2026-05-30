@@ -71,6 +71,8 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:repositories` - List of Maven repository URLs.
 - `:dependencies` - List of Maven coordinates in the format `"group:artifact:version"`.
 - `:local-dependencies` - List of local Nuke projects to build and link.
+- `:git-registries` - List of base git URLs used to resolve short dependency names (see [Git Dependencies](#git-dependencies)).
+- `:git-dependencies` - List of git-based dependencies in `"name#ref"` or `"url#ref"` format (see [Git Dependencies](#git-dependencies)).
 - `:analysis` - (New) Configuration block for JaCoCo, Error Prone, SonarQube, PMD, SpotBugs, and Checkstyle.
 - `:templates` - List of template files to process (variables like `${name}` and `${version}` will be replaced, and the `.template` extension will be stripped from the output).
 - `:main-class` - Fully qualified class name to execute with `nuke run` or to embed in Jar manifests.
@@ -82,6 +84,95 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:encoding` - Source encoding (e.g., `UTF-8`).
 - `:deploy` - Nexus deployment URL.
 - `:tasks` - A map of custom task definitions.
+
+## Git Dependencies
+
+Nuke supports pulling dependencies directly from git repositories, eliminating the need for a Nexus server for internal/team libraries. Dependencies are specified as `"name#ref"` where `ref` can be a **tag** (e.g., `v1.2.0`) or a **branch** (e.g., `main`, `develop`).
+
+- **Tags** are immutable — once cloned and built, they are cached permanently under `~/.nuke/git-deps/`.
+- **Branches** are re-fetched on each build. If new commits are detected, the dependency is automatically rebuilt.
+
+### Basic Usage (full URLs)
+
+```edn
+{:name "my-app"
+ :version "2.0.0"
+ :git-dependencies ["https://gitea.klabs.home/nico/my-utils#v1.2.0"
+                     "git@gitea.klabs.home:nico/other-lib#develop"]
+ :main-class "com.example.Main"}
+```
+
+### Using Registries (short names)
+
+Define `:git-registries` to avoid repeating base URLs. When a dependency has no `://` or `git@` prefix, Nuke tries each registry in order:
+
+```edn
+{:name "my-app"
+ :version "2.0.0"
+ :git-registries ["https://gitea.klabs.home/nico"
+                   "git@gitea.klabs.home:team"]
+ :git-dependencies ["my-utils#v1.2.0"
+                     "shared-lib#main"
+                     "https://github.com/external/lib#v0.5.0"]
+ :main-class "com.example.Main"}
+```
+
+In this example, `my-utils#v1.2.0` will first try `https://gitea.klabs.home/nico/my-utils`, then `git@gitea.klabs.home:team/my-utils`. Full URLs like the GitHub one are used directly.
+
+### Subfolder Dependencies (monorepo support)
+
+Use `//` to reference a subdirectory within a repository. The repo is cloned once and the specified subfolder is built:
+
+```edn
+{:name "my-app"
+ :version "2.0.0"
+ :git-dependencies ["ssh://git@s5:2222/hellonico/nuke.git//example-math-lib#main"]
+ :main-class "com.example.Main"}
+```
+
+This also works with registries:
+
+```edn
+{:name "my-app"
+ :version "2.0.0"
+ :git-registries ["ssh://git@s5:2222/hellonico"]
+ :git-dependencies ["nuke//example-math-lib#main"
+                     "nuke//example-java-lib#v2.0"]
+ :main-class "com.example.Main"}
+```
+
+Multiple subfolders from the same repo share a single clone — only one git fetch is performed.
+
+### Mixed Maven + Git Dependencies
+
+Both `:dependencies` (Maven/Nexus) and `:git-dependencies` can coexist. All jars end up on the same classpath:
+
+```edn
+{:name "my-app"
+ :version "2.0.0"
+ :repositories ["https://repo1.maven.org/maven2"]
+ :dependencies ["com.google.guava:guava:32.1.2-jre"]
+ :git-registries ["https://gitea.klabs.home/nico"]
+ :git-dependencies ["my-utils#v1.2.0"]
+ :main-class "com.example.Main"}
+```
+
+### Authentication
+
+- **SSH** (`git@` or `ssh://`): Uses your standard SSH agent and key configuration. No extra setup needed.
+- **HTTP(S)**: Set the `NUKE_GIT_USER` and `NUKE_GIT_PASSWORD` environment variables. Nuke will inject them into HTTP(S) clone URLs automatically.
+
+### Transitive Git Dependencies
+
+If a git dependency itself declares `:git-dependencies` in its `nuke.edn`, those are resolved recursively. Registries from both the parent and child projects are merged (child registries take precedence).
+
+### Cache Management
+
+Git dependencies are cached globally under `~/.nuke/git-deps/<host>/<owner>/<repo>/<ref>/`. To clear the cache:
+
+```sh
+nuke clean-git-deps
+```
 
 ## Custom Tasks
 
@@ -125,7 +216,17 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 
 ## Version History
 
-### v1.1.0 (Latest)
+### v1.2.0 (Latest)
+- **Git-Based Dependencies**: Pull dependencies directly from git repositories instead of Nexus. Supports tags (cached permanently) and branches (re-fetched and rebuilt on new commits).
+- **Git Registries**: Define `:git-registries` to avoid repeating base URLs for team/org repos.
+- **Subfolder Dependencies**: Reference subdirectories within monorepos using `//` syntax (e.g., `"my-repo//libs/utils#v1.0"`). Multiple subfolders share a single clone.
+- **SSH & HTTP Auth**: SSH repos use standard ssh-agent. HTTP(S) repos support `NUKE_GIT_USER` / `NUKE_GIT_PASSWORD` environment variables.
+- **Transitive Git Deps**: Git dependencies that declare their own `:git-dependencies` are resolved recursively with cycle detection.
+- **Cache Management**: New `nuke clean-git-deps` task to wipe the global `~/.nuke/git-deps/` cache.
+- **IDE Integration**: IntelliJ plugin now correctly resolves git dependency jars for code completion and compilation.
+- **Bug Fix**: Fixed `build-dep-jar` jar packaging — classes were nested under an extra `classes/` prefix.
+
+### v1.1.0
 - **Static Analysis Dashboard**: Introduced the `nuke analyze` command to generate a unified `nuke-analysis.html` static analysis dashboard.
 - **JaCoCo Coverage**: Added the `nuke metrics` and `nuke test-cov` commands to compute test coverage dynamically and inject it into the dashboard.
 - **Error Prone**: Integrated Google's Error Prone directly into the `javac` compile step (enabled via `:error-prone {:enabled true}`).

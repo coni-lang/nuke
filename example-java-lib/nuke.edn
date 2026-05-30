@@ -1,4 +1,5 @@
 {:name "example-java-lib"
  :version "1.0.0"
  :group-id "com.example"
+ :javac-opts ["--release" "17"]
  :local-dependencies ["../example-math-lib"]}

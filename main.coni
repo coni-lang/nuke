@@ -6,8 +6,9 @@
 (require "libs/java/src/maven.coni" :as maven)
 (require "libs/java/src/core.coni" :as java)
 (require "libs/java/src/jars.coni" :as jars)
+(require "libs/java/src/git.coni" :as git)
 
-(def nuke-version "1.1.0")
+(def nuke-version "1.2.0")
 (def nuke-build-time "DEV")
 (def nuke-commit "DEV")
 (def nuke-commit-msg "DEV")
@@ -117,6 +118,22 @@
         (log/step "Downloading dependencies to ~/.m2/repository...")
         (maven/resolve-deps deps repos)
         (log/success "All dependencies downloaded successfully!"))))
+  ;; Git-based dependencies
+  (let [git-deps (:git-dependencies config)
+        git-regs (or (:git-registries config) [])]
+    (if git-deps
+      (do
+        (io/mkdir-p "libs")
+        (log/step "Resolving git dependencies...")
+        (let [cache-dirs (git/resolve-git-deps git-deps git-regs config)]
+          (loop [rem cache-dirs]
+            (if (not (empty? rem))
+              (do
+                (jars/link-or-copy-jars (str (first rem) "/target") "libs")
+                (jars/link-or-copy-jars (str (first rem) "/libs") "libs")
+                (recur (rest rem)))))
+          (log/success "Git dependencies resolved!")))))
+  ;; Local dependencies
   (let [local-deps (:local-dependencies config)]
     (if local-deps
       (loop [rem local-deps]
@@ -477,6 +494,7 @@
 (register-task "upload" ["jar"] "Upload the jar and POM to Nexus" exec-upload)
 (register-task "upload-uberjar" ["zip"] "Upload the uberjar and POM to Nexus" exec-upload-uberjar)
 (register-task "build" ["upload-uberjar"] "Run the full build pipeline" (fn [config] (log/success "Build complete.")))
+(register-task "clean-git-deps" [] "Clear the global git dependency cache (~/.nuke/git-deps)" (fn [config] (git/clean-git-cache)))
 
 (defn run-task-graph [task-name config completed]
   (if (not (= (get completed task-name :not-found) :not-found))

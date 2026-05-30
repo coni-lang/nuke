@@ -272,6 +272,8 @@ public class NukeProjectManager {
             if (!classpathJars.isEmpty()) {
                 for (String path : classpathJars) {
                     File f = new File(path);
+                    // Resolve relative paths (e.g. "libs/foo.jar") against basePath
+                    if (!f.isAbsolute()) f = new File(basePath, path);
                     if (f.exists() && f.getName().endsWith(".jar")) {
                         boolean isLocal = false;
                         for (String lpn : localProjectNames) {
