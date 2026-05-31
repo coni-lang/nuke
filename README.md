@@ -5,7 +5,7 @@ Nuke is a fast, lightweight, and extensible build tool for Java projects, config
 ## Features
 - **EDN Configuration**: Define your project metadata, dependencies, and custom tasks in a simple `nuke.edn` file.
 - **Dependency Management**: Automatically downloads dependencies from Maven Central or resolves them from local Nuke projects.
-- **Built-in Tasks**: Standard build lifecycle out of the box (`clean`, `compile`, `test`, `run`, `jar`, `uberjar`, `zip`, `upload`, `build`).
+- **Built-in Tasks**: Standard build lifecycle out of the box (`clean`, `compile`, `test`, `run`, `jar`, `uberjar`, `zip`, `upload`, `build`, `dependencies`).
 - **Static Analysis & Metrics (New)**: First-class integration with JaCoCo (Coverage), SpotBugs, PMD, Checkstyle, Error Prone, and SonarQube. Automatically stitches results into a beautiful unified HTML dashboard!
 - **Custom Tasks**: Easily define custom tasks in `nuke.edn` that can execute bash commands, run Coni scripts, or extend existing built-in tasks.
 - **IDE Support**: Comes with an IntelliJ IDEA plugin for seamless integration, task execution, and classpath synchronization.
@@ -225,6 +225,7 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 - **Cache Management**: New `nuke clean-git-deps` task to wipe the global `~/.nuke/git-deps/` cache.
 - **IDE Integration**: IntelliJ plugin now correctly resolves git dependency jars for code completion and compilation.
 - **Bug Fix**: Fixed `build-dep-jar` jar packaging — classes were nested under an extra `classes/` prefix.
+- **Dependencies Tree**: New `nuke dependencies` task to print a recursive tree of all local, Maven, and Git dependencies.
 
 ### v1.1.0
 - **Static Analysis Dashboard**: Introduced the `nuke analyze` command to generate a unified `nuke-analysis.html` static analysis dashboard.
