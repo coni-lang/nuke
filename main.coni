@@ -64,6 +64,95 @@
           (recur (rest rem) (conj acc class-name)))))))
 
 ;; Task Implementations
+(defn print-maven-tree [deps repos mdepth]
+  (loop [rem deps]
+    (if (not (empty? rem))
+      (let [dep (first rem)
+            parts (str/split dep ":")
+            g (get parts 0)
+            a (get parts 1)
+            v (get parts 2)
+            mpad (str/repeat "  " mdepth)]
+        (println (str mpad "- [maven] " dep))
+        (let [pom-path (maven/ensure-pom-downloaded g a v repos)]
+          (if (io/exists? pom-path)
+            (let [pom-content (io/read-file pom-path)
+                  self (maven/parse-self pom-content)
+                  parent (maven/parse-parent pom-content)
+                  props (maven/get-all-properties pom-path repos)
+                  child-deps (maven/parse-dependencies pom-content)
+                  resolved-child-deps (loop [crem child-deps cacc []]
+                                        (if (empty? crem) cacc
+                                          (let [cdep (first crem)
+                                                cv (:version cdep)
+                                                cv-resolved (maven/resolve-placeholder cv props self parent)
+                                                cv-final (if (or (= cv-resolved "") (nil? cv-resolved))
+                                                           (or (:version cdep) "")
+                                                           cv-resolved)]
+                                            (recur (rest crem) (conj cacc (str (:groupId cdep) ":" (:artifactId cdep) ":" cv-final))))))]
+              (print-maven-tree resolved-child-deps repos (+ mdepth 1)))))
+        (recur (rest rem))))))
+
+(defn print-deps-tree [config depth visited-git base-pwd]
+  (let [pad (str/repeat "  " depth)
+        repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
+        git-regs (or (:git-registries config) [])]
+    
+    ;; Local deps
+    (let [locals (:local-dependencies config)]
+      (if locals
+        (loop [rem locals]
+          (if (not (empty? rem))
+            (let [ldep (first rem)
+                  lpath (if (string? ldep) ldep (:path ldep))]
+              (if lpath
+                (let [abs-path (io/join-path base-pwd lpath)
+                      child-edn (str abs-path "/nuke.edn")
+                      child-cfg (if (io/exists? child-edn) (edn/parse-edn (io/read-file child-edn)) {})]
+                  (println (str pad "- [local] " lpath))
+                  (print-deps-tree child-cfg (+ depth 1) visited-git abs-path)))
+              (recur (rest rem)))))))
+              
+    ;; Maven deps
+    (let [mavens (:dependencies config)]
+      (if mavens
+        (print-maven-tree mavens repos depth)))
+        
+    ;; Git deps
+    (let [gits (:git-dependencies config)]
+      (if gits
+        (loop [rem gits]
+          (if (not (empty? rem))
+            (let [dep-str (first rem)
+                  parsed (git/parse-git-dep dep-str)
+                  dep-name (:name parsed)
+                  dep-path (:path parsed)
+                  dep-ref (:ref parsed)
+                  dep-key (str dep-name (if dep-path (str "//" dep-path) "") "#" dep-ref)]
+              (println (str pad "- [git] " dep-str))
+              (if (not (get @visited-git dep-key))
+                (do
+                  (reset! visited-git (assoc @visited-git dep-key true))
+                  (let [candidate-urls (git/resolve-git-urls dep-name git-regs)
+                        clone-result (loop [url-rem candidate-urls]
+                                       (if (empty? url-rem) nil
+                                         (let [url (first url-rem)
+                                               cache-dir (git/git-dep-cache-dir url dep-ref)
+                                               r (git/ensure-cloned url dep-ref cache-dir)]
+                                           (if r (assoc r :url url) (recur (rest url-rem))))))]
+                    (if clone-result
+                      (let [cache-dir (:path clone-result)
+                            build-dir (if dep-path (str cache-dir "/" dep-path) cache-dir)
+                            dep-edn (str build-dir "/nuke.edn")
+                            dep-cfg (if (io/exists? dep-edn) (edn/parse-edn (io/read-file dep-edn)) {})]
+                        (print-deps-tree dep-cfg (+ depth 1) visited-git build-dir))))))
+              (recur (rest rem)))))))))
+
+(defn exec-dependencies [config]
+  (println (str "Dependencies for " (or (:name config) "project") ":"))
+  (let [visited-git (atom {})]
+    (print-deps-tree config 1 visited-git (io/get-pwd))))
+
 (defn clean-project [abs-path config]
   (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs"])]
     (loop [rem clean-targets]
@@ -495,6 +584,7 @@
 (register-task "upload-uberjar" ["zip"] "Upload the uberjar and POM to Nexus" exec-upload-uberjar)
 (register-task "build" ["upload-uberjar"] "Run the full build pipeline" (fn [config] (log/success "Build complete.")))
 (register-task "clean-git-deps" [] "Clear the global git dependency cache (~/.nuke/git-deps)" (fn [config] (git/clean-git-cache)))
+(register-task "dependencies" [] "Show recursively dependencies (local, maven, git)" exec-dependencies)
 
 (defn run-task-graph [task-name config completed]
   (if (not (= (get completed task-name :not-found) :not-found))
