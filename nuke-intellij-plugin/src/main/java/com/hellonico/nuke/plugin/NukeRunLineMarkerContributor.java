@@ -53,13 +53,20 @@ public class NukeRunLineMarkerContributor extends RunLineMarkerContributor {
     }
 
     private AnAction createRunAction(PsiElement element, String taskName, String displayName) {
-        return new AnAction("Run " + displayName, "Execute " + taskName, AllIcons.RunConfigurations.TestState.Run) {
+        return createRunAction(element, taskName, "", displayName);
+    }
+
+    private AnAction createRunAction(PsiElement element, String taskName, String arguments, String displayName) {
+        String description = "Execute " + taskName + (arguments != null && !arguments.isEmpty() ? " " + arguments : "");
+        return new AnAction("Run " + displayName, description, AllIcons.RunConfigurations.TestState.Run) {
             @Override
             public void actionPerformed(@NotNull AnActionEvent e) {
                 RunManager runManager = RunManager.getInstance(element.getProject());
                 ConfigurationFactory factory = new NukeRunConfigurationType().getConfigurationFactories()[0];
-                RunnerAndConfigurationSettings settings = runManager.createConfiguration("Nuke " + taskName, factory);
+                String name = "Nuke " + taskName + (arguments != null && !arguments.isEmpty() ? " " + arguments : "");
+                RunnerAndConfigurationSettings settings = runManager.createConfiguration(name, factory);
                 ((NukeRunConfiguration) settings.getConfiguration()).setTaskName(taskName);
+                ((NukeRunConfiguration) settings.getConfiguration()).setArguments(arguments != null ? arguments : "");
                 runManager.addConfiguration(settings);
                 runManager.setSelectedConfiguration(settings);
                 ProgramRunnerUtil.executeConfiguration(settings, DefaultRunExecutor.getRunExecutorInstance());
@@ -79,6 +86,62 @@ public class NukeRunLineMarkerContributor extends RunLineMarkerContributor {
                 if (taskName.equals("main-class")) {
                     AnAction runAction = createRunAction(element, "run", "Application");
                     return new Info(AllIcons.RunConfigurations.TestState.Run, new AnAction[]{runAction}, e -> "Run application");
+                }
+
+                if (taskName.equals("deploy")) {
+                    List<AnAction> actions = new ArrayList<>();
+                    PsiElement value = element.getNextSibling();
+                    while (value != null && (value.getText().trim().isEmpty() || value.getNode().getElementType().toString().equals("WHITE_SPACE") || value.getNode().getElementType() == NukeTokenTypes.COMMENT)) {
+                        value = value.getNextSibling();
+                    }
+                    if (value != null) {
+                        IElementType valueType = value.getNode().getElementType();
+                        if (valueType.toString().equals("LIST")) {
+                            List<String> keys = new ArrayList<>();
+                            PsiElement child = value.getFirstChild();
+                            boolean isKey = true;
+                            while (child != null) {
+                                IElementType childType = child.getNode().getElementType();
+                                if (childType == NukeTokenTypes.BRACE1 || childType == NukeTokenTypes.BRACE2 || childType.toString().equals("WHITE_SPACE") || childType == NukeTokenTypes.COMMENT) {
+                                    child = child.getNextSibling();
+                                    continue;
+                                }
+                                if (isKey) {
+                                    if (childType == NukeTokenTypes.KEYWORD || childType == NukeTokenTypes.STRING) {
+                                        String keyText = child.getText();
+                                        if (childType == NukeTokenTypes.KEYWORD && keyText.startsWith(":")) {
+                                            keyText = keyText.substring(1);
+                                        } else if (childType == NukeTokenTypes.STRING) {
+                                            if (keyText.startsWith("\"") && keyText.endsWith("\"") && keyText.length() >= 2) {
+                                                keyText = keyText.substring(1, keyText.length() - 1);
+                                            }
+                                        }
+                                        keys.add(keyText);
+                                    }
+                                    isKey = false;
+                                } else {
+                                    isKey = true;
+                                }
+                                child = child.getNextSibling();
+                            }
+                            if (!keys.isEmpty()) {
+                                for (String key : keys) {
+                                    actions.add(createRunAction(element, "upload", key, "upload to " + key));
+                                    actions.add(createRunAction(element, "upload-uberjar", key, "upload-uberjar to " + key));
+                                }
+                            } else {
+                                actions.add(createRunAction(element, "upload", "upload"));
+                                actions.add(createRunAction(element, "upload-uberjar", "upload-uberjar"));
+                            }
+                        } else {
+                            actions.add(createRunAction(element, "upload", "upload"));
+                            actions.add(createRunAction(element, "upload-uberjar", "upload-uberjar"));
+                        }
+                    } else {
+                        actions.add(createRunAction(element, "upload", "upload"));
+                        actions.add(createRunAction(element, "upload-uberjar", "upload-uberjar"));
+                    }
+                    return new Info(AllIcons.RunConfigurations.TestState.Run, actions.toArray(new AnAction[0]), e -> "Run Deployment Tasks");
                 }
                 
                 if (taskName.equals("dependencies") || taskName.equals("test-dependencies")) {

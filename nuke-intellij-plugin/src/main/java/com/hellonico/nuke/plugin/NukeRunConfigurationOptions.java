@@ -5,6 +5,7 @@ import com.intellij.openapi.components.StoredProperty;
 
 public class NukeRunConfigurationOptions extends RunConfigurationOptions {
     private final StoredProperty<String> myTaskName = string("").provideDelegate(this, "taskName");
+    private final StoredProperty<String> myArguments = string("").provideDelegate(this, "arguments");
 
     public String getTaskName() {
         return myTaskName.getValue(this);
@@ -12,5 +13,13 @@ public class NukeRunConfigurationOptions extends RunConfigurationOptions {
 
     public void setTaskName(String taskName) {
         myTaskName.setValue(this, taskName);
+    }
+
+    public String getArguments() {
+        return myArguments.getValue(this);
+    }
+
+    public void setArguments(String arguments) {
+        myArguments.setValue(this, arguments);
     }
 }

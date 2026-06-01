@@ -82,7 +82,7 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:resource-dir` - Resource directory (default: `src/main/resources`).
 - `:javac-opts` - List of arguments to pass to `javac`.
 - `:encoding` - Source encoding (e.g., `UTF-8`).
-- `:deploy` - Nexus deployment URL.
+- `:deploy` - Nexus deployment URL (string) or a map of multiple deployment targets (e.g., `{:nexus1 "url1" :nexus2 "url2"}`).
 - `:tasks` - A map of custom task definitions.
 
 ## Git Dependencies
@@ -217,6 +217,7 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 ## Version History
 
 ### v1.2.0 (Latest)
+- **Multiple Deploy Targets**: `:deploy` can now be a map of named repositories. Specify the target using `nuke upload <target-name>` or `nuke upload-uberjar <target-name>`. If target is omitted, Nuke will fail-fast and list available options. The IntelliJ plugin adds a gutter menu option for each deployment target.
 - **Git-Based Dependencies**: Pull dependencies directly from git repositories instead of Nexus. Supports tags (cached permanently) and branches (re-fetched and rebuilt on new commits).
 - **Git Registries**: Define `:git-registries` to avoid repeating base URLs for team/org repos.
 - **Subfolder Dependencies**: Reference subdirectories within monorepos using `//` syntax (e.g., `"my-repo//libs/utils#v1.0"`). Multiple subfolders share a single clone.

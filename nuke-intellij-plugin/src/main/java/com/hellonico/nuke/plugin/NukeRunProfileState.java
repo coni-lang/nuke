@@ -23,6 +23,10 @@ public class NukeRunProfileState extends CommandLineState {
     protected ProcessHandler startProcess() throws ExecutionException {
         String basePath = myConfiguration.getProject().getBasePath();
         GeneralCommandLine cmd = new GeneralCommandLine(NukeProjectManager.getNukeExecutable(), myConfiguration.getTaskName());
+        String args = myConfiguration.getArguments();
+        if (args != null && !args.trim().isEmpty()) {
+            cmd.addParameters(args.trim().split("\\s+"));
+        }
         cmd.setWorkDirectory(basePath);
         
         ProcessHandler processHandler = ProcessHandlerFactory.getInstance().createColoredProcessHandler(cmd);

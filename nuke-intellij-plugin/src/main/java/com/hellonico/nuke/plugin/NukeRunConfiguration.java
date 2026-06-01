@@ -27,6 +27,14 @@ public class NukeRunConfiguration extends RunConfigurationBase<NukeRunConfigurat
         getOptions().setTaskName(taskName);
     }
 
+    public String getArguments() {
+        return getOptions().getArguments();
+    }
+
+    public void setArguments(String arguments) {
+        getOptions().setArguments(arguments);
+    }
+
     @NotNull
     @Override
     public SettingsEditor<? extends RunConfiguration> getConfigurationEditor() {

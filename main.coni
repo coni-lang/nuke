@@ -445,78 +445,140 @@
               (if (not (empty? (str/trim (:stdout res))))
                 (println (str/trim (:stdout res)))))))))))
 
+(defn get-deploy-url [deploy-val arg-str]
+  (cond
+    (string? deploy-val)
+    {:url deploy-val :name nil}
+
+    (map? deploy-val)
+    (let [ks (keys deploy-val)
+          k-count (count ks)]
+      (cond
+        (= k-count 0)
+        (do
+          (log/error "No deploy locations configured in the :deploy map.")
+          (sys-exit 1))
+
+        (and (= k-count 1) (nil? arg-str))
+        (let [k (first ks)]
+          (log/info (str "Defaulting to deploy location: " (if (keyword? k) (name k) (str k))))
+          {:url (get deploy-val k) :name (if (keyword? k) (name k) (str k))})
+
+        :else
+        (if (nil? arg-str)
+          (do
+            (log/error "Multiple deploy locations available:")
+            (loop [rem-ks ks]
+              (if (not (empty? rem-ks))
+                (do
+                  (log/error (str "  - " (let [k (first rem-ks)] (if (keyword? k) (name k) (str k)))))
+                  (recur (rest rem-ks)))))
+            (log/error "Please specify a location (e.g. nuke upload <location>)")
+            (sys-exit 1))
+          (let [matched-k (loop [rem-ks ks]
+                            (if (empty? rem-ks)
+                              nil
+                              (let [k (first rem-ks)
+                                    k-name (if (keyword? k) (name k) (str k))]
+                                (if (= k-name arg-str)
+                                  k
+                                  (recur (rest rem-ks))))))]
+            (if (nil? matched-k)
+              (do
+                (log/error (str "Deploy location '" arg-str "' not found. Available locations:"))
+                (loop [rem-ks ks]
+                  (if (not (empty? rem-ks))
+                    (do
+                      (log/error (str "  - " (let [k (first rem-ks)] (if (keyword? k) (name k) (str k)))))
+                      (recur (rest rem-ks)))))
+                (sys-exit 1))
+              {:url (get deploy-val matched-k) :name (if (keyword? matched-k) (name matched-k) (str matched-k))})))))
+
+    :else
+    (do
+      (log/error "Invalid :deploy configuration. Must be a string or a map.")
+      (sys-exit 1))))
+
 (defn exec-upload-impl [config jar-ext]
-  (let [deploy-url (:deploy config)]
-    (if (nil? deploy-url)
+  (let [deploy-val (:deploy config)]
+    (if (nil? deploy-val)
       (do
         (log/error "No :deploy URL configured in nuke.edn")
         (sys-exit 1)))
-    (log/step "Uploading to Nexus...")
-    (let [pom-content (generate-pom config)]
-      (io/write-file "target/pom.xml" pom-content)
-      (let [app-version (or (:version config) "1.0.0")
-            app-name (or (:name config) "app")
-            group-id (or (:group-id config) "com.example")
-            tname (:task-name config)
-            suffix (if (and tname
-                           (not (= tname "upload"))
-                           (not (= tname "upload-uberjar")))
-                     (str "-" tname) "")
-            default-jar (str "target/" app-name "-" app-version suffix jar-ext)
-            jar-name (or (:jar-name config) default-jar)
-            ;; Extract repo name and base URL from :deploy
-            ;; e.g. "http://nexus.klabs.home/repository/maven-releases/" -> repo=maven-releases, base=http://nexus.klabs.home
-            clean-url (if (str/ends-with? deploy-url "/") (str/substring deploy-url 0 (- (count deploy-url) 1)) deploy-url)
-            repo-idx (str/index-of clean-url "/repository/")
-            has-repo (>= repo-idx 0)
-            base-url (if has-repo (str/substring clean-url 0 repo-idx) clean-url)
-            deploy-repo (if has-repo
-                          (str/substring clean-url (+ repo-idx (count "/repository/")) (count clean-url))
-                          nil)
-            url (if has-repo
-                  (str base-url "/service/rest/v1/components?repository=" deploy-repo)
-                  (str clean-url "/service/rest/v1/components"))]
-        (log/info (str "  Jar: " jar-name))
-        (log/info (str "  POM: target/pom.xml"))
-        (log/info (str "  URL: " url))
-        (if (not (io/exists? jar-name))
-          (do
-            (log/error (str "Jar not found: " jar-name))
-            (sys-exit 1)))
-        (let [env-user (sys-env-get "NUKE_DEPLOY_USER")
-              env-pass (sys-env-get "NUKE_DEPLOY_PASSWORD")
-              m2-creds (if (and (= env-user "") (= env-pass "") deploy-repo)
-                         (maven/parse-m2-settings-credentials deploy-repo)
-                         nil)
-              user (cond
-                     (not (= env-user "")) env-user
-                     m2-creds (:username m2-creds)
-                     :else nil)
-              pass (cond
-                     (not (= env-pass "")) env-pass
-                     m2-creds (:password m2-creds)
-                     :else nil)]
-          (if (or (nil? user) (nil? pass))
+    (let [args (sys-os-args)
+          a1 (if (> (count args) 1) (get args 1) "")
+          arg-str (if (str/includes? a1 ".coni")
+                    (if (> (count args) 3) (get args 3) nil)
+                    (if (> (count args) 2) (get args 2) nil))
+          deploy-info (get-deploy-url deploy-val arg-str)
+          deploy-url (:url deploy-info)
+          deploy-name (:name deploy-info)]
+      (log/step (str "Uploading to Nexus" (if deploy-name (str " (" deploy-name ")") "") "..."))
+      (let [pom-content (generate-pom config)]
+        (io/write-file "target/pom.xml" pom-content)
+        (let [app-version (or (:version config) "1.0.0")
+              app-name (or (:name config) "app")
+              group-id (or (:group-id config) "com.example")
+              tname (:task-name config)
+              suffix (if (and tname
+                             (not (= tname "upload"))
+                             (not (= tname "upload-uberjar")))
+                       (str "-" tname) "")
+              default-jar (str "target/" app-name "-" app-version suffix jar-ext)
+              jar-name (or (:jar-name config) default-jar)
+              ;; Extract repo name and base URL from :deploy
+              ;; e.g. "http://nexus.klabs.home/repository/maven-releases/" -> repo=maven-releases, base=http://nexus.klabs.home
+              clean-url (if (str/ends-with? deploy-url "/") (str/substring deploy-url 0 (- (count deploy-url) 1)) deploy-url)
+              repo-idx (str/index-of clean-url "/repository/")
+              has-repo (>= repo-idx 0)
+              base-url (if has-repo (str/substring clean-url 0 repo-idx) clean-url)
+              deploy-repo (if has-repo
+                            (str/substring clean-url (+ repo-idx (count "/repository/")) (count clean-url))
+                            nil)
+              url (if has-repo
+                    (str base-url "/service/rest/v1/components?repository=" deploy-repo)
+                    (str clean-url "/service/rest/v1/components"))]
+          (log/info (str "  Jar: " jar-name))
+          (log/info (str "  POM: target/pom.xml"))
+          (log/info (str "  URL: " url))
+          (if (not (io/exists? jar-name))
             (do
-              (log/error "No deploy credentials found!")
-              (log/info  "  Set NUKE_DEPLOY_USER and NUKE_DEPLOY_PASSWORD env vars,")
-              (log/info  (str "  or add a <server><id>" (or deploy-repo "your-repo") "</id>...</server> to ~/.m2/settings.xml"))
+              (log/error (str "Jar not found: " jar-name))
               (sys-exit 1)))
-          (let [cmd (str "curl -sS -f -u '" user ":" pass "' -X POST " (io/quote-path url)
-                         " -F maven2.groupId=" group-id
-                         " -F maven2.artifactId=" app-name
-                         " -F maven2.version=" app-version
-                         " -F maven2.asset1=@" jar-name
-                         " -F maven2.asset1.extension=jar"
-                         " -F maven2.asset2=@target/pom.xml"
-                         " -F maven2.asset2.extension=pom")]
-            (let [res (shell/sh cmd)]
-              (if (not (= 0 (:code res)))
-                (do
-                  (log/error "Upload failed!")
-                  (println (:stderr res))
-                  (sys-exit 1))
-                (log/success "Successfully uploaded to Nexus!")))))))))
+          (let [env-user (sys-env-get "NUKE_DEPLOY_USER")
+                env-pass (sys-env-get "NUKE_DEPLOY_PASSWORD")
+                m2-creds (if (and (= env-user "") (= env-pass "") deploy-repo)
+                           (maven/parse-m2-settings-credentials deploy-repo)
+                           nil)
+                user (cond
+                       (not (= env-user "")) env-user
+                       m2-creds (:username m2-creds)
+                       :else nil)
+                pass (cond
+                       (not (= env-pass "")) env-pass
+                       m2-creds (:password m2-creds)
+                       :else nil)]
+            (if (or (nil? user) (nil? pass))
+              (do
+                (log/error "No deploy credentials found!")
+                (log/info  "  Set NUKE_DEPLOY_USER and NUKE_DEPLOY_PASSWORD env vars,")
+                (log/info  (str "  or add a <server><id>" (or deploy-repo "your-repo") "</id>...</server> to ~/.m2/settings.xml"))
+                (sys-exit 1)))
+            (let [cmd (str "curl -sS -f -u '" user ":" pass "' -X POST " (io/quote-path url)
+                           " -F maven2.groupId=" group-id
+                           " -F maven2.artifactId=" app-name
+                           " -F maven2.version=" app-version
+                           " -F maven2.asset1=@" jar-name
+                           " -F maven2.asset1.extension=jar"
+                           " -F maven2.asset2=@target/pom.xml"
+                           " -F maven2.asset2.extension=pom")]
+              (let [res (shell/sh cmd)]
+                (if (not (= 0 (:code res)))
+                  (do
+                    (log/error "Upload failed!")
+                    (println (:stderr res))
+                    (sys-exit 1))
+                  (log/success "Successfully uploaded to Nexus!"))))))))))
 
 (defn exec-upload [config]
   (exec-upload-impl config ".jar"))
