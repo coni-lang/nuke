@@ -564,21 +564,13 @@
                 (log/info  "  Set NUKE_DEPLOY_USER and NUKE_DEPLOY_PASSWORD env vars,")
                 (log/info  (str "  or add a <server><id>" (or deploy-repo "your-repo") "</id>...</server> to ~/.m2/settings.xml"))
                 (sys-exit 1)))
-            (let [cmd (str "curl -sS -f -u '" user ":" pass "' -X POST " (io/quote-path url)
-                           " -F maven2.groupId=" group-id
-                           " -F maven2.artifactId=" app-name
-                           " -F maven2.version=" app-version
-                           " -F maven2.asset1=@" jar-name
-                           " -F maven2.asset1.extension=jar"
-                           " -F maven2.asset2=@target/pom.xml"
-                           " -F maven2.asset2.extension=pom")]
-              (let [res (shell/sh cmd)]
-                (if (not (= 0 (:code res)))
-                  (do
-                    (log/error "Upload failed!")
-                    (println (:stderr res))
-                    (sys-exit 1))
-                  (log/success "Successfully uploaded to Nexus!"))))))))))
+            (let [res (maven/upload-nexus-artifact user pass url group-id app-name app-version jar-name "target/pom.xml")]
+              (if (not (= 0 (:code res)))
+                (do
+                  (log/error "Upload failed!")
+                  (println (:stderr res))
+                  (sys-exit 1))
+                (log/success "Successfully uploaded to Nexus!")))))))))
 
 (defn exec-upload [config]
   (exec-upload-impl config ".jar"))

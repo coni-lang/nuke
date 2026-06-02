@@ -20,6 +20,9 @@ else
     CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 ./coni-compiler build .build/main.coni -o nuke
 fi
 
+echo "Running smoke test to verify syntax and parsing..."
+./nuke version || { echo "Smoke test failed! nuke has syntax errors or runtime issues."; exit 1; }
+
 # Copy to IntelliJ plugin resources
 mkdir -p nuke-intellij-plugin/src/main/resources/bin
 if [ -f nuke ]; then
