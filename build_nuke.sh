@@ -12,12 +12,12 @@ sed -i '' "s~(def nuke-build-time .*~(def nuke-build-time \"$DATE\")~g" .build/m
 sed -i '' "s~(def nuke-commit-msg .*~(def nuke-commit-msg \"$MSG\")~g" .build/main.coni
 
 if [ "$BUILD_ALL" = "1" ]; then
-    CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 ./coni-compiler build .build/main.coni -o nuke-mac
-    CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 ./coni-compiler build .build/main.coni -o nuke-linux
-    CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 ./coni-compiler build .build/main.coni -o nuke.exe
+    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 ./coni-compiler build .build/main.coni -o nuke-mac
+    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 ./coni-compiler build .build/main.coni -o nuke-linux
+    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 ./coni-compiler build .build/main.coni -o nuke.exe
     cp nuke-mac nuke
 else
-    CONI_HOME=/Users/nico/cool/coni-lang PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 ./coni-compiler build .build/main.coni -o nuke
+    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 ./coni-compiler build .build/main.coni -o nuke
 fi
 
 echo "Running smoke test to verify syntax and parsing..."

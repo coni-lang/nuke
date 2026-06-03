@@ -8,7 +8,6 @@ target
 build
 out
 uber-classes
-.github
 example-java-lib/libs
 example-spring-boot/libs
 .gradle
