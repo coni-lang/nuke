@@ -30,15 +30,15 @@ jobs:
         run: |
           git clone https://gitea.hellonico.info/hellonico/coni-lang.git $(pwd)/coni-lang
           
-      - name: Download NPKM
-        run: |
-          curl -LO https://github.com/coni-lang/npkm/releases/download/build-8/npkm-coni-release-2026-06-03-0948.zip
-          unzip npkm-coni-release-2026-06-03-0948.zip
-          chmod +x npkm-coni
+      - name: Setup NPKM
+        uses: coni-lang/npkm/.github/actions/setup-npkm@main
+        with:
+          version: 'build-8'
+          asset-name: 'npkm-coni-release-2026-06-03-0948.zip'
           
       - name: Build and Package Release
         run: |
-          CONI_HOME=$(pwd)/coni-lang ./npkm-coni package_release.edn
+          CONI_HOME=$(pwd)/coni-lang npkm package_release.edn
           
       - name: Create Release
         uses: softprops/action-gh-release@v2
