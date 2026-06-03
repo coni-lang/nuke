@@ -1,7 +1,7 @@
 {:name "Nuke Release"
  :tasks
  [{:name "Build Nuke (All Platforms)"
-   :shell {:cmd "BUILD_ALL=1 sh ./build_nuke.sh && mkdir -p nuke-intellij-plugin/src/main/resources/bin && cp nuke-mac nuke-linux nuke.exe nuke-intellij-plugin/src/main/resources/bin/"
+   :shell {:cmd "BUILD_ALL=1 bash ./build_nuke.sh && mkdir -p nuke-intellij-plugin/src/main/resources/bin && cp nuke-mac nuke-linux nuke.exe nuke-intellij-plugin/src/main/resources/bin/"
            :cwd "."}}
   {:name "Build IntelliJ Plugin"
    :shell {:cmd "./gradlew buildPlugin -x buildSearchableOptions"
