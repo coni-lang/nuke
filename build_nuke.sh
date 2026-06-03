@@ -18,7 +18,13 @@ if [ "$BUILD_ALL" = "1" ]; then
     CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $COMPILER build .build/main.coni -o nuke-mac
     CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $COMPILER build .build/main.coni -o nuke-linux
     CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $COMPILER build .build/main.coni -o nuke.exe
-    cp nuke-mac nuke
+    if [ "$(uname)" = "Linux" ]; then
+        cp nuke-linux nuke
+    elif [ "$(uname)" = "Darwin" ]; then
+        cp nuke-mac nuke
+    else
+        cp nuke.exe nuke
+    fi
 else
     CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 $COMPILER build .build/main.coni -o nuke
 fi
