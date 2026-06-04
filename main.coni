@@ -280,9 +280,13 @@
               (log/info (str "Running javac: " cmd))
               (let [res (shell/sh cmd)]
                 (if (not (= 0 (:code res)))
-                  (do
-                    (log/error "Compilation failed!")
-                    (println (:stderr res))
+                  (let [err-output (:stderr res)
+                        err-lines (filter (fn [l] (str/includes? l "error:")) (str/split err-output "\n"))
+                        err-count (count err-lines)
+                        file-lines (filter (fn [l] (str/includes? l ".java:")) err-lines)
+                        file-set (into #{} (map (fn [l] (first (str/split l ":"))) file-lines))]
+                    (log/error (str "Compilation failed! (" err-count " error" (if (> err-count 1) "s" "") " in " (count file-set) " file" (if (> (count file-set) 1) "s" "") ")"))
+                    (println err-output)
                     (sys-exit 1))
                   (io/write-file "classes/.last_compile" "")))))
           (log/warn "No java files found. Skipping compilation.")))
@@ -755,6 +759,47 @@
             (register-task tname deps desc exec-fn)
             (recur (rest rem))))))))
 
+(defn exec-init [args]
+  (let [cmd-idx (if (> (count args) 1)
+                  (if (str/includes? (get args 1) ".coni") 2 1)
+                  1)
+        dir-arg (if (> (count args) (+ cmd-idx 1))
+                  (get args (+ cmd-idx 1))
+                  nil)
+        dir (or dir-arg ".")]
+    (if (and (io/exists? (str dir "/nuke.edn")) (not= dir "."))
+      (do (log/error (str "nuke.edn already exists in " dir)) (sys-exit 1)))
+    (io/mkdir-p dir)
+    (io/mkdir-p (str dir "/src/main/com/example"))
+    (io/mkdir-p (str dir "/src/main/resources"))
+    (io/mkdir-p (str dir "/src/tests/com/example"))
+    (let [project-name (if (= dir ".") "my-app" (last (str/split dir "/")))
+          edn-content (str "{:name \"" project-name "\"\n"
+                           " :version \"1.0.0\"\n"
+                           " :repositories [\"https://repo1.maven.org/maven2\"]\n"
+                           " :dependencies []\n"
+                           " :main-class \"com.example.Main\"}\n")
+          main-java (str "package com.example;\n\n"
+                         "public class Main {\n"
+                         "    public static void main(String[] args) {\n"
+                         "        System.out.println(\"Hello from " project-name "!\");\n"
+                         "    }\n"
+                         "}\n")
+          test-java (str "package com.example;\n\n"
+                         "public class MainTest {\n"
+                         "    public static void main(String[] args) {\n"
+                         "        System.out.println(\"Tests passed.\");\n"
+                         "    }\n"
+                         "}\n")]
+      (io/write-file (str dir "/nuke.edn") edn-content)
+      (io/write-file (str dir "/src/main/com/example/Main.java") main-java)
+      (io/write-file (str dir "/src/tests/com/example/MainTest.java") test-java)
+      (log/success (str "Project initialized at: " dir))
+      (println (str "  nuke.edn                              - Build configuration"))
+      (println (str "  src/main/com/example/Main.java         - Main class"))
+      (println (str "  src/tests/com/example/MainTest.java    - Test class"))
+      (println "\nRun 'nuke compile' to build, 'nuke run' to execute."))))
+
 (defn get-cmd [args]
   (if (> (count args) 1)
     (let [a1 (get args 1)]
@@ -765,32 +810,35 @@
 
 (defn run []
   (let [args (sys-os-args)
-        cmd (get-cmd args)
-        config-file (if (io/exists? "nuke.edn") "nuke.edn" nil)
-        config-content (if config-file (io/read-file config-file) nil)
-        raw-config (if config-content (edn/parse-edn config-content) {})
-        analysis-cfg (:analysis raw-config)
-        config (let [jacoco-v (or (:version (:jacoco analysis-cfg)) "0.8.11")
-                     agent-dest (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")
-                     base-opts (or (:test-jvm-opts raw-config) [])
-                     cov-opts (conj base-opts (io/quote-path (str "-javaagent:" agent-dest "=destfile=target/jacoco.exec")))
-                     base-tasks (or (:tasks raw-config) {})
-                     new-tasks (-> base-tasks
-                                 (assoc :prepare-metrics {:coni "(require \"libs/java/src/metrics.coni\" :as m) (m/download-jacoco @global-task-config)"})
-                                 (assoc :test-cov {:extends "test" :deps [:compile :prepare-metrics] :test-jvm-opts cov-opts})
-                                 (assoc :metrics {:desc "Run the Java metrics toolkit" :deps [:test-cov] :coni "(require \"libs/java/src/metrics.coni\" :as m) (m/run-all-metrics @global-task-config)"})
-                                 (assoc :spotbugs {:desc "Run SpotBugs static analysis" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-spotbugs @global-task-config)"})
-                                 (assoc :pmd {:desc "Run PMD static analysis" :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-pmd @global-task-config)"})
-                                 (assoc :checkstyle {:desc "Run Checkstyle analysis" :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-checkstyle @global-task-config)"})
-                                 (assoc :sonarqube {:desc "Run SonarQube Scanner" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-sonarqube @global-task-config)"})
-                                 (assoc :analyze {:desc "Run all static analysis tools" :deps [:compile :metrics] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-all-analysis @global-task-config)"}))]
-                 (assoc raw-config :tasks new-tasks))]
-    (load-custom-tasks config)
+        cmd (get-cmd args)]
+    ;; Fast-path commands that don't need nuke.edn
     (cond
-      (or (= cmd "-v") (= cmd "-V") (= cmd "--version") (= cmd "version")) (show-version)
-      (= cmd "tasks") (show-tasks)
-      (= cmd "info")  (show-info config)
-      :else (run-task-graph cmd config {}))))
+      (or (= cmd "-v") (= cmd "-V") (= cmd "--version") (= cmd "version")) (do (show-version) (sys-exit 0))
+      (= cmd "init") (do (exec-init args) (sys-exit 0)))
+    (let [config-file (if (io/exists? "nuke.edn") "nuke.edn" nil)
+          config-content (if config-file (io/read-file config-file) nil)
+          raw-config (if config-content (edn/parse-edn config-content) {})
+          analysis-cfg (:analysis raw-config)
+          config (let [jacoco-v (or (:version (:jacoco analysis-cfg)) "0.8.11")
+                       agent-dest (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")
+                       base-opts (or (:test-jvm-opts raw-config) [])
+                       cov-opts (conj base-opts (io/quote-path (str "-javaagent:" agent-dest "=destfile=target/jacoco.exec")))
+                       base-tasks (or (:tasks raw-config) {})
+                       new-tasks (-> base-tasks
+                                   (assoc :prepare-metrics {:coni "(require \"libs/java/src/metrics.coni\" :as m) (m/download-jacoco @global-task-config)"})
+                                   (assoc :test-cov {:extends "test" :deps [:compile :prepare-metrics] :test-jvm-opts cov-opts})
+                                   (assoc :metrics {:desc "Run the Java metrics toolkit" :deps [:test-cov] :coni "(require \"libs/java/src/metrics.coni\" :as m) (m/run-all-metrics @global-task-config)"})
+                                   (assoc :spotbugs {:desc "Run SpotBugs static analysis" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-spotbugs @global-task-config)"})
+                                   (assoc :pmd {:desc "Run PMD static analysis" :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-pmd @global-task-config)"})
+                                   (assoc :checkstyle {:desc "Run Checkstyle analysis" :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-checkstyle @global-task-config)"})
+                                   (assoc :sonarqube {:desc "Run SonarQube Scanner" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-sonarqube @global-task-config)"})
+                                   (assoc :analyze {:desc "Run all static analysis tools" :deps [:compile :metrics] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-all-analysis @global-task-config)"}))]
+                   (assoc raw-config :tasks new-tasks))]
+      (load-custom-tasks config)
+      (cond
+        (= cmd "tasks") (show-tasks)
+        (= cmd "info")  (show-info config)
+        :else (run-task-graph cmd config {})))))
 
 (run)
 (sys-exit 0)
