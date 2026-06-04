@@ -248,16 +248,36 @@
 (defn get-classpath-jars [config base-path]
   (jars/get-classpath-jars config base-path))
 
+(defn hash-directory [dir ext]
+  (let [files (io/find-files dir ext)
+        file-hashes (map (fn [f] (sys-md5 (io/read-file f))) files)]
+    (sys-md5 (str/join "," file-hashes))))
+
 (defn exec-classpath [config]
   (println (get-classpath-jars config ".")))
 
 (defn exec-compile [config]
   (io/mkdir-p "classes")
   (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        cache-enabled (if (contains? config :build-cache) (:build-cache config) true)
+        java-files (io/find-files src-dir ".java")
+        cp-jars (get-classpath-jars config ".")
+        cache-key (if cache-enabled
+                    (let [src-hash (if (> (count java-files) 0) (hash-directory src-dir ".java") "empty")
+                          cp-hash (sys-md5 (str/join "," cp-jars))]
+                      (sys-md5 (str src-hash cp-hash)))
+                    nil)
+        cache-dir (str (sys-env-get "HOME") "/.nuke/build-cache")
+        cache-zip (if cache-enabled (str cache-dir "/" cache-key ".zip") nil)
         needs-compile (or (not (io/exists? "classes/.last_compile")) 
                           (any-file-newer? src-dir "classes/.last_compile"))]
     (if needs-compile
-      (let [java-files (io/find-files src-dir ".java")]
+      (if (and cache-enabled cache-zip (io/exists? cache-zip))
+        (do
+          (log/step "Restoring from build cache...")
+          (shell/sh (str "unzip -o -q " cache-zip " -d ."))
+          (io/write-file "classes/.last_compile" "")
+          (log/success (str "Restored from cache: " cache-key)))
         (if (> (count java-files) 0)
           (do
             (log/step "Compiling Java files...")
@@ -308,7 +328,12 @@
                                     (io/mkdir-p (io/parent-dir dest))
                                     (io/copy f dest)
                                     (recur (rest rem))))))))))
-                    (io/write-file "classes/.last_compile" ""))))))
+                    (io/write-file "classes/.last_compile" "")
+                    (if cache-enabled
+                      (do
+                        (io/mkdir-p cache-dir)
+                        (shell/sh (str "cd classes && zip -r -q " cache-zip " ."))))
+                    (log/success "Compilation successful!"))))))
           (log/warn "No java files found. Skipping compilation.")))
       (log/success "Source files unchanged. Skipping compilation."))))
 
@@ -422,20 +447,46 @@
                           (sys-exit 1))
                         (let [test-classes (find-test-classes test-dir)]
                           (if (not (empty? test-classes))
-                            (let [use-junit5 (str/includes? cp-jars "junit-platform-console")
+                            (let [args (sys-os-args)
+                                  select-class (loop [rem args]
+                                                 (if (empty? rem) nil
+                                                   (if (str/starts-with? (first rem) "--select-class=")
+                                                     (str/replace (first rem) "--select-class=" "")
+                                                     (if (= (first rem) "--select-class")
+                                                       (if (> (count rem) 1) (get rem 1) nil)
+                                                       (recur (rest rem))))))
+                                  parallel-arg (loop [rem args]
+                                                 (if (empty? rem) nil
+                                                   (if (str/starts-with? (first rem) "--parallel=")
+                                                     (str/replace (first rem) "--parallel=" "")
+                                                     (if (= (first rem) "--parallel")
+                                                       (if (> (count rem) 1) (get rem 1) nil)
+                                                       (recur (rest rem))))))
+                                  parallel-val (if parallel-arg (str/parse-float parallel-arg) 1)
+                                  test-classes-list (if select-class [select-class] (filter (fn [s] (not (empty? (str/trim s)))) (str/split test-classes "\n")))
+                                  use-junit5 (str/includes? cp-jars "junit-platform-console")
                                   jvm-opts (if (:test-jvm-opts config) (str " " (str/join " " (:test-jvm-opts config))) "")
-                                  test-cmd (if use-junit5
-                                             (let [junit5-args (let [classes (str/split test-classes "\n")]
-                                                                 (loop [rem classes acc []]
-                                                                   (if (empty? rem)
-                                                                     (str/join " " acc)
-                                                                     (let [c (str/trim (first rem))]
-                                                                       (if (empty? c)
-                                                                         (recur (rest rem) acc)
-                                                                         (recur (rest rem) (conj acc (str "--select-class=" c))))))))]
-                                               (str (java/get-java-bin config "java") jvm-opts " " cp-arg " org.junit.platform.console.ConsoleLauncher " junit5-args))
-                                             (str (java/get-java-bin config "java") jvm-opts " " cp-arg " org.junit.runner.JUnitCore " (str/replace test-classes "\n" " ")))]
-                              (let [test-res (shell/sh test-cmd)]
+                                  chunk-size (if (> parallel-val 1)
+                                               (let [cs (/ (count test-classes-list) parallel-val)]
+                                                 (if (< cs 1) 1 (+ cs 1)))
+                                               (count test-classes-list))
+                                  chunks (loop [rem test-classes-list acc [] current-chunk []]
+                                           (if (empty? rem)
+                                             (if (> (count current-chunk) 0) (conj acc current-chunk) acc)
+                                             (if (>= (count current-chunk) chunk-size)
+                                               (recur rem (conj acc current-chunk) [])
+                                               (recur (rest rem) acc (conj current-chunk (first rem))))))
+                                  cmds (map (fn [chunk]
+                                              (if use-junit5
+                                                (let [junit5-args (str/join " " (map (fn [c] (str "--select-class=" c)) chunk))]
+                                                  (str (java/get-java-bin config "java") jvm-opts " " cp-arg " org.junit.platform.console.ConsoleLauncher " junit5-args))
+                                                (str (java/get-java-bin config "java") jvm-opts " " cp-arg " org.junit.runner.JUnitCore " (str/join " " chunk))))
+                                            chunks)
+                                  full-cmd (if (> parallel-val 1)
+                                             (str (str/join " & " cmds) " & wait")
+                                             (if (> (count cmds) 0) (first cmds) "echo 'No tests to run'"))]
+                              (if (> parallel-val 1) (log/info (str "Running tests in parallel (" parallel-val " chunks)")))
+                              (let [test-res (shell/sh full-cmd)]
                                 (io/mkdir-p "target")
                                 (io/write-file "target/test-report.txt" (:stdout test-res))
                                 (println (:stdout test-res))
@@ -832,6 +883,32 @@
         a1))
     "build"))
 
+(defn nuke-watch [target config]
+  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        test-dir (or (:test-dir config) (if (io/exists? "src/tests") "src/tests" "src/test"))
+        get-hash (fn [] 
+                   (let [cmd (str "find " src-dir " " test-dir " nuke.edn -type f 2>/dev/null | xargs stat -f '%m' 2>/dev/null || find " src-dir " " test-dir " nuke.edn -type f 2>/dev/null | xargs stat -c '%Y' 2>/dev/null")
+                         res (str/trim (:stdout (shell/sh cmd)))]
+                     (sys-md5 res)))]
+    (println (str " [34m⬡ Nuke Watch Mode — watching: " src-dir ", " test-dir " and nuke.edn [0m"))
+    (println (str "  Target: " target))
+    (println "  Press Ctrl+C to stop.
+")
+    (loop [last-hash (get-hash) run-count 0]
+      (shell/sh "sleep 1")
+      (let [new-hash (get-hash)]
+        (if (not= last-hash new-hash)
+          (do
+            (println (str "\n\033[33m[watch] Change detected — re-running target: " target " (run #" (+ run-count 1) ")\033[0m\n"))
+            ;; run task graph
+            ;; note: we must ignore failures so it keeps watching!
+            (let [res (shell/sh (str (get (sys-os-args) 0) " " target))]
+              (println (:stdout res))
+              (if (not= (:stderr res) "")
+                (println (:stderr res))))
+            (recur new-hash (+ run-count 1)))
+          (recur last-hash run-count))))))
+
 (defn run []
   (let [args (sys-os-args)
         cmd (get-cmd args)]
@@ -862,6 +939,7 @@
       (cond
         (= cmd "tasks") (show-tasks)
         (= cmd "info")  (show-info config)
+        (= cmd "watch") (nuke-watch (if (> (count args) 2) (get args 2) "compile") config)
         :else (run-task-graph cmd config {})))))
 
 (run)

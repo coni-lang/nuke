@@ -156,10 +156,44 @@ Additionally, Nuke features **Global Classpath Deduplication**. If your main pro
 {:name "my-app"
  :version "2.0.0"
  :repositories ["https://repo1.maven.org/maven2"]
- :dependencies ["com.google.guava:guava:32.1.2-jre"]
+ :dependencies [{:coord "com.google.guava:guava:32.1.2-jre"
+                 :exclusions ["commons-logging:commons-logging"]}]
  :git-registries ["https://gitea.klabs.home/nico"]
  :git-dependencies ["my-utils#v1.2.0"]
  :main-class "com.example.Main"}
+```
+*Note: Transitive dependency exclusions are fully supported by passing a map with `:exclusions` to your `:dependencies` list.*
+
+### Build Cache & Incremental Compilation
+
+Nuke automatically skips compiling if source files haven't changed. It also supports **hash-based incremental build caching**:
+When building, Nuke hashes the `src` directory and classpath. If the exact state has been compiled before, it instantly restores `classes/` from `~/.nuke/build-cache/` instead of invoking `javac`.
+
+Enable/disable in `nuke.edn` (enabled by default):
+```edn
+{:build-cache true}
+```
+
+### Watch Mode
+
+Actively develop with continuous compilation and testing:
+
+```bash
+nuke watch compile
+nuke watch test
+```
+Nuke watches `src/main`, `src/tests`, and `nuke.edn` for file changes and re-runs the target immediately.
+
+### Parallel Tests & Filtering
+
+Run specific test classes or execute tests in parallel to speed up your CI/CD pipeline:
+
+```bash
+# Run a specific test class
+nuke test --select-class com.example.MainTest
+
+# Run tests in parallel (spawns 4 test runners simultaneously)
+nuke test --parallel 4
 ```
 
 ### Authentication
