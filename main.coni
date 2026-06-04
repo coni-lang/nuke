@@ -201,8 +201,10 @@
 
 (defn exec-download-deps [config]
   (let [repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
-        deps (:dependencies config)]
-    (if deps
+        main-deps (if (:dependencies config) (:dependencies config) [])
+        test-deps (if (:test-dependencies config) (:test-dependencies config) [])
+        deps (concat main-deps test-deps)]
+    (if (> (count deps) 0)
       (do
         (log/step "Downloading dependencies to ~/.m2/repository...")
         (maven/resolve-deps deps repos)
@@ -403,7 +405,11 @@
               (if (> (count java-files) 0)
                 (do
                   (log/step "Running tests...")
-                  (let [cp-jars (get-classpath-jars config ".")
+                  (let [test-deps (if (:test-dependencies config) (:test-dependencies config) [])
+                        main-deps (if (:dependencies config) (:dependencies config) [])
+                        all-deps (concat main-deps test-deps)
+                        test-config (assoc config :dependencies all-deps)
+                        cp-jars (get-classpath-jars test-config ".")
                         cp-arg (str "-cp " (io/quote-path (str "classes" io/classpath-separator "test-classes" (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))))
                         files-arg (str/join " " java-files)
                         cmd (str (java/get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]

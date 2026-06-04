@@ -22,7 +22,8 @@ In your project root, run `nuke <task>`. If no task is provided, `nuke build` is
 
 ### Common Commands
 
-- `nuke compile` - Compile Java source files (runs Error Prone if enabled)
+- `nuke init` - Scaffold a new Nuke project structure
+- `nuke compile` - Compile Java source files (runs Error Prone if enabled, copies resources)
 - `nuke test` - Run JUnit tests
 - `nuke metrics` - Run tests with JaCoCo agent and generate coverage reports
 - `nuke analyze` - Run full static analysis (SpotBugs, PMD, Checkstyle) and generate the unified `nuke-analysis.html` dashboard
@@ -70,6 +71,7 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:group-id` - The Maven group ID (used for Nexus upload/POM generation).
 - `:repositories` - List of Maven repository URLs.
 - `:dependencies` - List of Maven coordinates in the format `"group:artifact:version"`.
+- `:test-dependencies` - List of Maven coordinates used exclusively during `nuke test` and excluded from `uberjar`.
 - `:local-dependencies` - List of local Nuke projects to build and link.
 - `:git-registries` - List of base git URLs used to resolve short dependency names (see [Git Dependencies](#git-dependencies)).
 - `:git-dependencies` - List of git-based dependencies in `"name#ref"` or `"url#ref"` format (see [Git Dependencies](#git-dependencies)).
@@ -77,9 +79,11 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:templates` - List of template files to process (variables like `${name}` and `${version}` will be replaced, and the `.template` extension will be stripped from the output).
 - `:main-class` - Fully qualified class name to execute with `nuke run` or to embed in Jar manifests.
 - `:java-home` - Optional override for `$JAVA_HOME`.
+- `:java-version` - Target Java release version (e.g., `"17"`), mapped to `javac --release`.
+- `:java-source` / `:java-target` - Legacy options for `javac -source` and `-target` if `java-version` is unused.
 - `:src-dir` - Source directory (default: `src/main`).
 - `:test-dir` - Test source directory (default: `src/tests`).
-- `:resource-dir` - Resource directory (default: `src/main/resources`).
+- `:resource-dir` - Resource directory (default: `src/main/resources`). Automatically copied to `classes/`.
 - `:javac-opts` - List of arguments to pass to `javac`.
 - `:encoding` - Source encoding (e.g., `UTF-8`).
 - `:deploy` - Nexus deployment URL (string) or a map of multiple deployment targets (e.g., `{:nexus1 "url1" :nexus2 "url2"}`).
@@ -145,7 +149,8 @@ Multiple subfolders from the same repo share a single clone — only one git fet
 
 ### Mixed Maven + Git Dependencies
 
-Both `:dependencies` (Maven/Nexus) and `:git-dependencies` can coexist. All jars end up on the same classpath:
+Both `:dependencies` (Maven/Nexus) and `:git-dependencies` can coexist. All jars end up on the same classpath.
+Additionally, Nuke features **Global Classpath Deduplication**. If your main project and git dependencies pull different versions of the same library (e.g., `guava-30` vs `guava-31`), Nuke resolves the conflict intelligently by keeping the nearest/highest declared version and preventing `NoSuchMethodError` classpath pollution.
 
 ```edn
 {:name "my-app"
