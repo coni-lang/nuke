@@ -1,0 +1,5 @@
+{:name "init"
+ :version "1.0.0"
+ :repositories ["https://repo1.maven.org/maven2"]
+ :dependencies []
+ :main-class "com.example.Main"}

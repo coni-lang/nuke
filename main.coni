@@ -275,8 +275,11 @@
                   cp-arg (if (empty? cp-jars) "" (str "-cp " (io/quote-path cp-jars)))
                   encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
                   opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
+                  java-version-arg (if (:java-version config) (str "--release " (:java-version config))
+                                    (if (and (:java-source config) (:java-target config))
+                                        (str "-source " (:java-source config) " -target " (:java-target config)) ""))
                   files-arg (str/join " " java-files)
-                  cmd (str (java/get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " ep-opts " " opts-arg " " files-arg)]
+                  cmd (str (java/get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " ep-opts " " opts-arg " " java-version-arg " " files-arg)]
               (log/info (str "Running javac: " cmd))
               (let [res (shell/sh cmd)]
                 (if (not (= 0 (:code res)))
@@ -288,7 +291,22 @@
                     (log/error (str "Compilation failed! (" err-count " error" (if (> err-count 1) "s" "") " in " (count file-set) " file" (if (> (count file-set) 1) "s" "") ")"))
                     (println err-output)
                     (sys-exit 1))
-                  (io/write-file "classes/.last_compile" "")))))
+                  (do
+                    (let [res-dir (if (:resources config) (:resources config) "src/main/resources")]
+                      (if (io/exists? res-dir)
+                        (let [res-files (io/find-files res-dir "")]
+                          (if (> (count res-files) 0)
+                            (do
+                              (log/info (str "Copying resources from " res-dir))
+                              (loop [rem res-files]
+                                (if (empty? rem) nil
+                                  (let [f (first rem)
+                                        rel (subs f (count res-dir) (count f))
+                                        dest (str "classes" (if (str/starts-with? rel "/") rel (str "/" rel)))]
+                                    (io/mkdir-p (io/parent-dir dest))
+                                    (io/copy f dest)
+                                    (recur (rest rem))))))))))
+                    (io/write-file "classes/.last_compile" ""))))))
           (log/warn "No java files found. Skipping compilation.")))
       (log/success "Source files unchanged. Skipping compilation."))))
 
