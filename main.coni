@@ -753,13 +753,26 @@
   (println (str "  Name: " (or (:name config) "app")))
   (println (str "  Version: " (or (:version config) "1.0.0")))
   (println (str "  Main-Class: " (or (:main-class config) "None")))
+  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        test-dir (or (:test-dir config) (if (io/exists? "src/tests") "src/tests" "src/test"))
+        res-dir (or (:resources config) "src/main/resources")
+        java-files (if (io/exists? src-dir) (count (io/find-files src-dir ".java")) 0)
+        test-files (if (io/exists? test-dir) (count (io/find-files test-dir ".java")) 0)
+        res-files (if (io/exists? res-dir) (count (filter (fn [f] (not (io/dir? f))) (io/find-files res-dir ""))) 0)
+        test-cases (if (io/exists? test-dir) 
+                     (str/trim (:stdout (shell/sh (str "grep -h -r '@Test' " test-dir " 2>/dev/null | wc -l")))) "0")
+        test-cases-cnt (if (= test-cases "") "0" (str/trim test-cases))]
+    (println "  Source Code:")
+    (println (str "    Java Classes: " java-files))
+    (println (str "    Test Classes: " test-files " (" (str/trim test-cases-cnt) " test cases)"))
+    (println (str "    Resources:    " res-files)))
   (println "  Dependencies:")
   (let [deps (:dependencies config)]
     (if (and deps (> (count deps) 0))
       (loop [rem deps]
         (if (not (empty? rem))
           (do
-            (println (str "    - " (first rem)))
+            (println (str "    - " (let [d (first rem)] (if (= (type d) "String") d (:coord d)))))
             (recur (rest rem)))))
       (println "    None"))))
 
