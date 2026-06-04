@@ -875,6 +875,26 @@
       (println (str "  src/tests/com/example/MainTest.java    - Test class"))
       (println "\nRun 'nuke compile' to build, 'nuke run' to execute."))))
 
+(defn exec-doctor []
+  (println "\n\033[36m    _   __      __   [0m")
+  (println "\033[36m   / | / /_  __/ /_  ___[0m")
+  (println "\033[36m  /  |/ / / / / //_/ / _ \\[0m")
+  (println "\033[36m / /|  / /_/ / ,<   /  __/[0m")
+  (println "\033[36m/_/ |_/\\__,_/_/|_|  \\___/[0m")
+  (println " \033[34m⬡ Nuke Build Tool Health Check ⬡\033[0m\n")
+  (let [check (fn [name cmd]
+                (let [res (shell/sh cmd)]
+                  (if (= 0 (:code res))
+                    (println (str "  \033[32m✓\033[0m " name ": OK (" (str/trim (first (str/split (:stdout res) "\n"))) ")"))
+                    (println (str "  \033[31m✗\033[0m " name ": Missing or failed")))))]
+    (check "Java" "java -version 2>&1")
+    (check "Javac" "javac -version 2>&1")
+    (check "Zip" "zip -v 2>&1 | head -n 2")
+    (check "Unzip" "unzip -v 2>&1 | head -n 1")
+    (check "Git" "git --version")
+    (check "Curl" "curl --version | head -n 1")
+    (println "\n\033[32mAll systems nominal. Ready to build.\033[0m\n")))
+
 (defn get-cmd [args]
   (if (> (count args) 1)
     (let [a1 (get args 1)]
@@ -915,7 +935,8 @@
     ;; Fast-path commands that don't need nuke.edn
     (cond
       (or (= cmd "-v") (= cmd "-V") (= cmd "--version") (= cmd "version")) (do (show-version) (sys-exit 0))
-      (= cmd "init") (do (exec-init args) (sys-exit 0)))
+      (= cmd "init") (do (exec-init args) (sys-exit 0))
+      (= cmd "doctor") (do (exec-doctor) (sys-exit 0)))
     (let [config-file (if (io/exists? "nuke.edn") "nuke.edn" nil)
           config-content (if config-file (io/read-file config-file) nil)
           raw-config (if config-content (edn/parse-edn config-content) {})
