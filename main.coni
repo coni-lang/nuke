@@ -888,6 +888,158 @@
       (println (str "  src/tests/com/example/MainTest.java    - Test class"))
       (println "\nRun 'nuke compile' to build, 'nuke run' to execute."))))
 
+(defn exec-onefetch [args config]
+  (let [cmd-idx (if (> (count args) 1) (if (str/includes? (get args 1) ".coni") 2 1) 1)
+        raw-target (if (> (count args) (+ cmd-idx 1)) (get args (+ cmd-idx 1)) ".")
+        is-remote (or (str/starts-with? raw-target "http://")
+                      (str/starts-with? raw-target "https://")
+                      (str/starts-with? raw-target "git@")
+                      (str/starts-with? raw-target "ssh://"))
+        target-dir (if is-remote
+                     (let [url-hash (sys-md5 raw-target)
+                           tmp-dir (str (sys-env-get "HOME") "/.nuke/onefetch-cache/" url-hash)]
+                       (if (not (io/exists? tmp-dir))
+                         (do
+                           (io/mkdir-p (io/parent-dir tmp-dir))
+                           (println (str "Cloning remote repository " raw-target " ..."))
+                           (let [res (shell/sh (str "git clone --depth 1 " (io/quote-path raw-target) " " (io/quote-path tmp-dir)))]
+                             (if (not= 0 (:code res))
+                               (do
+                                 (println (str "Failed to clone repository: " (:stderr res)))
+                                 (sys-exit 1)))))
+                         (do
+                           (println (str "Updating cached repository " raw-target " ..."))
+                           (let [res (shell/sh (str "git -C " (io/quote-path tmp-dir) " pull --depth 1"))]
+                             (if (not= 0 (:code res))
+                               (println (str "Warning: Failed to update cache: " (:stderr res)))))))
+                       tmp-dir)
+                     raw-target)]
+    (if (not (io/exists? target-dir))
+      (do (println (str "Target path does not exist: " target-dir)) (sys-exit 1)))
+    (let [git-cmd (fn [c] (str/trim (:stdout (shell/sh (str "git -C " (io/quote-path target-dir) " " c)))))
+          project-name (if is-remote raw-target
+                         (let [n (git-cmd "rev-parse --show-toplevel")]
+                           (if (= n "") (io/file-name target-dir) (io/file-name n))))
+          commits (let [c (git-cmd "rev-list --count HEAD")] (if (= c "") "0" c))
+          created (let [d (git-cmd "log --reverse --format=%cd --date=short")] 
+                    (if (= d "") "Unknown" (first (str/split d "\n"))))
+          authors-raw (git-cmd "log --format='%aN' | sort | uniq -c | sort -rn | head -n 3")
+          authors (if (= authors-raw "") "Unknown"
+                    (str/join ", " (map (fn [l] (let [t (str/trim l) idx (str/index-of t " ")] (if (>= idx 0) (str/trim (sys-str-sub t (+ idx 1) (count t))) t))) (str/split authors-raw "\n"))))
+          files (io/file-seq target-dir)
+          stats (loop [rem files acc {} total 0 file-cnt 0]
+                  (if (empty? rem)
+                    {:lang acc :total total :count file-cnt}
+                    (let [f (first rem) rest-rem (rest rem)]
+                      (if (or (str/includes? f "/.git/") (str/includes? f "/node_modules/")
+                              (str/includes? f "/target/") (str/includes? f "/classes/"))
+                        (recur rest-rem acc total file-cnt)
+                        (if (io/file? f)
+                          (let [idx (io/last-slash-index f)
+                                name (if (>= idx 0) (sys-str-sub f (+ idx 1) (count f)) f)
+                                dot-idx (str/last-index-of name ".")
+                                ext (if (> dot-idx 0) (sys-str-sub name (+ dot-idx 1) (count name)) "unknown")
+                                ext-lower (str/lower ext)
+                                size (io/file-size f)
+                                current-size (or (get acc ext-lower) 0)]
+                            (recur rest-rem (assoc acc ext-lower (+ current-size size)) (+ total size) (+ file-cnt 1)))
+                          (recur rest-rem acc total file-cnt))))))
+          lang-map (:lang stats)
+          total-size (:total stats)
+          file-count (:count stats)
+          latest-commit (let [lc (git-cmd "log -1 --format='%cd %h %s' --date=short")] (if (= lc "") "Unknown" lc))
+          read-license-name (fn [path]
+                              (let [content (io/read-file path)
+                                    lines (str/split content "\n")
+                                    first-line (loop [rem lines]
+                                                 (if (empty? rem) "Unknown"
+                                                   (let [l (str/trim (first rem))]
+                                                     (if (and (> (count l) 0) (not (str/starts-with? l "Copyright")) (not (str/starts-with? l "=")))
+                                                       l
+                                                       (recur (rest rem))))))]
+                                (if (> (count first-line) 40) (str (sys-str-sub first-line 0 40) "...") first-line)))
+          license (cond
+                    (io/exists? (str target-dir "/LICENSE")) (read-license-name (str target-dir "/LICENSE"))
+                    (io/exists? (str target-dir "/LICENSE.md")) (read-license-name (str target-dir "/LICENSE.md"))
+                    (io/exists? (str target-dir "/LICENSE.txt")) (read-license-name (str target-dir "/LICENSE.txt"))
+                    :else "None")
+          top-langs (loop [rem-k (keys lang-map)
+                           top1 {:lang "" :sz 0}
+                           top2 {:lang "" :sz 0}
+                           top3 {:lang "" :sz 0}]
+                      (if (empty? rem-k)
+                        (let [format-lang (fn [t] (if (> (:sz t) 0) (str (:lang t) " (" (if (> total-size 0) (/ (* 100 (:sz t)) total-size) 0) "%) ") ""))]
+                          (str (format-lang top1) (format-lang top2) (format-lang top3)))
+                        (let [k (first rem-k) sz (get lang-map k) rest-k (rest rem-k)]
+                          (cond
+                            (> sz (:sz top1)) (recur rest-k {:lang k :sz sz} top1 top2)
+                            (> sz (:sz top2)) (recur rest-k top1 {:lang k :sz sz} top2)
+                            (> sz (:sz top3)) (recur rest-k top1 top2 {:lang k :sz sz})
+                            :else (recur rest-k top1 top2 top3)))))
+          logo [
+            "\033[36m    _   __      __    \033[0m"
+            "\033[36m   / | / /_  __/ /_  ___\033[0m"
+            "\033[36m  /  |/ / / / / //_/ / _ \\\033[0m"
+            "\033[36m / /|  / /_/ / ,<   /  __/\033[0m"
+            "\033[36m/_/ |_/\\__,_/_/|_|  \\___/\033[0m"
+          ]
+          info [
+            (str "\033[1;32mProject\033[0m   : " project-name)
+            (str "\033[1;33mLanguages\033[0m : " (if (= top-langs "") "None" top-langs))
+            (str "\033[1;34mAuthors\033[0m   : " authors)
+            (str "\033[1;35mCommits\033[0m   : " commits)
+            (str "\033[1;36mLatest\033[0m    : " latest-commit)
+            (str "\033[1;36mCreated\033[0m   : " created)
+            (str "\033[1;32mFiles\033[0m     : " file-count)
+            (str "\033[1;33mLicense\033[0m   : " license)
+          ]
+          max-lines (let [lc (count logo) ic (count info)] (if (> lc ic) lc ic))
+          matrix-lines (let [now-str (str/trim (:stdout (shell/sh "date +'%w %U %Y'")))
+                             parts (str/split now-str " ")
+                             now-w (int (get parts 0))
+                             now-U (int (get parts 1))
+                             now-Y (int (get parts 2))
+                             commits-raw (str/trim (:stdout (shell/sh (str "git -C " (io/quote-path target-dir) " log --since='52 weeks ago' --format='%cd' --date=format:'%w %U %Y'"))))
+                             commits-list (if (= commits-raw "") [] (str/split commits-raw "\n"))
+                             counts (loop [rem commits-list acc {}]
+                                      (if (empty? rem) acc
+                                        (let [line (first rem)
+                                              pts (str/split line " ")
+                                              w (int (get pts 0))
+                                              U (int (get pts 1))
+                                              Y (int (get pts 2))
+                                              weeks-ago (+ (* (- now-Y Y) 52) (- now-U U))
+                                              k (str weeks-ago "-" w)]
+                                          (if (and (>= weeks-ago 0) (< weeks-ago 52))
+                                            (recur (rest rem) (assoc acc k (+ (or (get acc k) 0) 1)))
+                                            (recur (rest rem) acc)))))]
+                         (loop [w 0 res []]
+                           (if (< w 7)
+                             (let [line (loop [wk 51 acc ""]
+                                          (if (< wk 0) acc
+                                            (let [c (or (get counts (str wk "-" w)) 0)
+                                                  char (cond
+                                                         (= c 0) "⬛"
+                                                         (< c 3) "🟩"
+                                                         (< c 6) "🟨"
+                                                         :else "🟧")]
+                                              (recur (- wk 1) (str acc char)))))]
+                               (recur (+ w 1) (conj res line)))
+                             res)))]
+      (println "")
+      (loop [i 0]
+        (if (< i max-lines)
+          (do
+            (let [l-str (if (< i (count logo)) (get logo i) "                          ")
+                  i-str (if (< i (count info)) (get info i) "")]
+              (println (str l-str "   " i-str)))
+            (recur (+ i 1)))))
+      (println "")
+      (println "Commit Matrix:")
+      (loop [w 0]
+        (if (< w 7)
+          (do (println (get matrix-lines w)) (recur (+ w 1)))))
+      (println ""))))
 (defn exec-doctor []
   (println "\n\033[36m    _   __      __   [0m")
   (println "\033[36m   / | / /_  __/ /_  ___[0m")
@@ -949,6 +1101,7 @@
     (cond
       (or (= cmd "-v") (= cmd "-V") (= cmd "--version") (= cmd "version")) (do (show-version) (sys-exit 0))
       (= cmd "init") (do (exec-init args) (sys-exit 0))
+      (= cmd "onefetch") (do (exec-onefetch args {}) (sys-exit 0))
       (= cmd "doctor") (do (exec-doctor) (sys-exit 0)))
     (let [config-file (if (io/exists? "nuke.edn") "nuke.edn" nil)
           config-content (if config-file (io/read-file config-file) nil)

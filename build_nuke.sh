@@ -3,7 +3,7 @@ set -e
 mkdir -p .build
 cp main.coni .build/main.coni
 COMMIT=$(git rev-parse --short HEAD || echo "unknown")
-DATE=$(date +"%Y-%m-%d %H:%M:%S %Z")
+DATE=$(date +"%Y-%m-%d %H:%M:%S %z")
 MSG=$(git log -1 --format=%s || echo "")
 MSG=${MSG//\"/}
 

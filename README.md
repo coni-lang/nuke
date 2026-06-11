@@ -33,6 +33,7 @@ In your project root, run `nuke <task>`. If no task is provided, `nuke build` is
 - `nuke upload` - Upload the jar and POM to a Nexus repository
 - `nuke tasks` - List all available tasks
 - `nuke info` - Display project metadata
+- `nuke onefetch` - Display a comprehensive git repository summary (stats, language breakdown, and commit matrix)
 
 ## Configuration (`nuke.edn`)
 
@@ -266,6 +267,8 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 - **IDE Integration**: IntelliJ plugin now correctly resolves git dependency jars for code completion and compilation.
 - **Bug Fix**: Fixed `build-dep-jar` jar packaging — classes were nested under an extra `classes/` prefix.
 - **Dependencies Tree**: New `nuke dependencies` task to print a recursive tree of all local, Maven, and Git dependencies.
+- **Onefetch Integration**: Added the `nuke onefetch` command to display a beautiful CLI summary of a local or remote Git repository, including file counts, license detection, and a 52-week commit activity matrix.
+- **Timezone Fix**: Fixed `nuke -v` displaying incorrect timezones on macOS by standardizing to the numeric timezone offset (`+0900`).
 
 ### v1.1.0
 - **Static Analysis Dashboard**: Introduced the `nuke analyze` command to generate a unified `nuke-analysis.html` static analysis dashboard.
