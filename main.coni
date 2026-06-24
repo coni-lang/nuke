@@ -154,7 +154,7 @@
     (print-deps-tree config 1 visited-git (io/get-pwd))))
 
 (defn clean-project [abs-path config]
-  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs"])]
+  (let [clean-targets (or (:clean config) ["classes" "uber-classes" "std-classes" "test-classes" "target" "libs" ".nuke-tmp"])]
     (loop [rem clean-targets]
       (if (not (empty? rem))
         (let [t (first rem)]
@@ -256,6 +256,16 @@
 (defn exec-classpath [config]
   (println (get-classpath-jars config ".")))
 
+;; Write an argfile for javac/java to avoid Windows command-line length limits.
+;; Returns the path to the argfile (caller passes it as @path).
+(defn write-argfile [args-list filename]
+  (let [argfile-dir ".nuke-tmp"
+        argfile-path (str argfile-dir "/" filename)]
+    (io/mkdir-p argfile-dir)
+    ;; Each arg on its own line; paths with spaces are quoted.
+    (io/write-file argfile-path (str/join "\n" args-list))
+    argfile-path))
+
 (defn exec-compile [config]
   (io/mkdir-p "classes")
   (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
@@ -294,15 +304,23 @@
                               (str jdk-exports " -XDcompilePolicy=simple -processorpath " (io/quote-path jar-path) " -Xplugin:ErrorProne"))
                             "")
                   cp-jars (get-classpath-jars config ".")
-                  cp-arg (if (empty? cp-jars) "" (str "-cp " (io/quote-path cp-jars)))
                   encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
                   opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
                   java-version-arg (if (:java-version config) (str "--release " (:java-version config))
                                     (if (and (:java-source config) (:java-target config))
                                         (str "-source " (:java-source config) " -target " (:java-target config)) ""))
-                  files-arg (str/join " " java-files)
-                  cmd (str (java/get-java-bin config "javac") " -d classes " cp-arg " " encoding-arg " " ep-opts " " opts-arg " " java-version-arg " " files-arg)]
-              (log/info (str "Running javac: " cmd))
+                  ;; Build argfile to avoid Windows command-line length limits
+                  argfile-args (reduce concat []
+                                 [["-d" "classes"]
+                                  (if (empty? cp-jars) [] ["-cp" (io/quote-path cp-jars)])
+                                  (if (empty? encoding-arg) [] [(str "-encoding") (:encoding config)])
+                                  (if (empty? ep-opts) [] (str/split ep-opts " "))
+                                  (if (:javac-opts config) (:javac-opts config) [])
+                                  (if (empty? java-version-arg) [] (str/split java-version-arg " "))
+                                  java-files])
+                  argfile-path (write-argfile argfile-args "compile-args.txt")
+                  cmd (str (java/get-java-bin config "javac") " @" argfile-path)]
+              (log/info (str "Running javac with argfile: " argfile-path " (" (count java-files) " source files, classpath length: " (count cp-jars) ")"))
               (let [res (shell/sh cmd)]
                 (if (not (= 0 (:code res)))
                   (let [err-output (:stderr res)
@@ -435,9 +453,13 @@
                         all-deps (concat main-deps test-deps)
                         test-config (assoc config :dependencies all-deps)
                         cp-jars (get-classpath-jars test-config ".")
-                        cp-arg (str "-cp " (io/quote-path (str "classes" io/classpath-separator "test-classes" (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))))
-                        files-arg (str/join " " java-files)
-                        cmd (str (java/get-java-bin config "javac") " -d test-classes " cp-arg " " files-arg)]
+                        test-cp-str (str "classes" io/classpath-separator "test-classes" (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))
+                        ;; Build argfile to avoid Windows command-line length limits
+                        test-argfile-args (concat
+                                           ["-d" "test-classes" "-cp" (io/quote-path test-cp-str)]
+                                           java-files)
+                        test-argfile-path (write-argfile test-argfile-args "test-compile-args.txt")
+                        cmd (str (java/get-java-bin config "javac") " @" test-argfile-path)]
                     (log/info "Compiling tests...")
                     (let [res (shell/sh cmd)]
                       (if (not (= 0 (:code res)))
@@ -476,12 +498,20 @@
                                              (if (>= (count current-chunk) chunk-size)
                                                (recur rem (conj acc current-chunk) [])
                                                (recur (rest rem) acc (conj current-chunk (first rem))))))
-                                  cmds (map (fn [chunk]
-                                              (if use-junit5
-                                                (let [junit5-args (str/join " " (map (fn [c] (str "--select-class=" c)) chunk))]
-                                                  (str (java/get-java-bin config "java") jvm-opts " " cp-arg " org.junit.platform.console.ConsoleLauncher " junit5-args))
-                                                (str (java/get-java-bin config "java") jvm-opts " " cp-arg " org.junit.runner.JUnitCore " (str/join " " chunk))))
-                                            chunks)
+                                  cmds (let [chunk-idx (atom 0)]
+                                          (map (fn [chunk]
+                                                (let [idx @chunk-idx
+                                                      _ (reset! chunk-idx (+ idx 1))
+                                                      run-test-args (reduce concat []
+                                                                      [(if (empty? jvm-opts) [] (str/split (str/trim jvm-opts) " "))
+                                                                      ["-cp" (io/quote-path test-cp-str)]
+                                                                      (if use-junit5
+                                                                        (reduce concat [] [["org.junit.platform.console.ConsoleLauncher"]
+                                                                                (map (fn [c] (str "--select-class=" c)) chunk)])
+                                                                        (reduce concat [] [["org.junit.runner.JUnitCore"] chunk]))])
+                                                      run-test-argfile (write-argfile run-test-args (str "test-run-args-" idx ".txt"))]
+                                                  (str (java/get-java-bin config "java") " @" run-test-argfile)))
+                                              chunks))
                                   full-cmd (if (> parallel-val 1)
                                              (str (str/join " & " cmds) " & wait")
                                              (if (> (count cmds) 0) (first cmds) "echo 'No tests to run'"))]
@@ -513,8 +543,11 @@
         (log/step (str "Running " main-class "..."))
         (let [cp-jars (get-classpath-jars config ".")
               res-dir (or (:resource-dir config) "src/main/resources")
-              cp-arg (str "-cp " (io/quote-path (str "classes" (if (io/exists? res-dir) (str io/classpath-separator res-dir) "") (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))))
-              cmd (str (java/get-java-bin config "java") " " cp-arg " " main-class)]
+              run-cp-str (str "classes" (if (io/exists? res-dir) (str io/classpath-separator res-dir) "") (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))
+              ;; Build argfile to avoid Windows command-line length limits
+              run-argfile-args (concat ["-cp" (io/quote-path run-cp-str)] [main-class])
+              run-argfile-path (write-argfile run-argfile-args "run-args.txt")
+              cmd (str (java/get-java-bin config "java") " @" run-argfile-path)]
           (let [res (shell/sh cmd)]
             (if (not (= 0 (:code res)))
               (do
