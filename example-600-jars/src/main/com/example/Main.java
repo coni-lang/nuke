@@ -21,7 +21,7 @@ public class Main {
 
         // Guava
         ImmutableList<String> items = ImmutableList.of("spring", "camel", "hibernate", "aws", "netty");
-        System.out.println("Frameworks: " + items);
+        System.out.println("Frameworks : " + items);
 
         // Jackson
         ObjectMapper mapper = new ObjectMapper();
