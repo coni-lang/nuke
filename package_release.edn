@@ -7,7 +7,7 @@
    :shell {:cmd "./gradlew buildPlugin -x buildSearchableOptions"
            :cwd "nuke-intellij-plugin"}}
   {:name "Create Dist Folder"
-   :shell {:cmd "rm -rf dist && mkdir -p dist/nuke/examples && cp nuke nuke.exe nuke-linux main.coni README.md CLA.md CODE_OF_CONDUCT.md CONTRIBUTING.md LICENSE README-LICENSING.md TRADEMARKS.md dist/nuke/ && rsync -a --exclude-from=.gitignore --exclude=example-spring-boot example-* dist/nuke/examples/ && cp nuke-intellij-plugin/build/distributions/*.zip dist/nuke/"
+   :shell {:cmd "rm -rf dist && mkdir -p dist/nuke/examples && cp nuke-mac nuke.exe nuke-linux main.coni README.md CLA.md CODE_OF_CONDUCT.md CONTRIBUTING.md LICENSE README-LICENSING.md TRADEMARKS.md dist/nuke/ && rsync -a --exclude-from=.gitignore --exclude=example-spring-boot example-* dist/nuke/examples/ && cp nuke-intellij-plugin/build/distributions/*.zip dist/nuke/ && cat << 'EOF' > dist/nuke/nuke\n#!/bin/sh\nDIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [ \"$(uname)\" = \"Darwin\" ]; then\n  exec \"$DIR/nuke-mac\" \"$@\"\nelif [ \"$(uname)\" = \"Linux\" ]; then\n  exec \"$DIR/nuke-linux\" \"$@\"\nelse\n  exec \"$DIR/nuke.exe\" \"$@\"\nfi\nEOF\nchmod +x dist/nuke/nuke"
            :cwd "."}}
   {:name "Zip Dist"
    :shell {:cmd "cd dist && zip -r nuke-dist-$(date +%Y-%m-%d_%H-%M).zip nuke"

@@ -200,30 +200,40 @@
 
 
 (defn exec-download-deps [config]
-  (let [repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
-        main-deps (if (:dependencies config) (:dependencies config) [])
-        test-deps (if (:test-dependencies config) (:test-dependencies config) [])
-        deps (concat main-deps test-deps)]
-    (if (> (count deps) 0)
+  (let [edn-path "nuke.edn"
+        edn-hash (if (io/exists? edn-path) (sys-md5 (io/read-file edn-path)) "no-edn")
+        cache-dir ".nuke-tmp"
+        cache-file (str cache-dir "/deps-cache.md5")
+        prev-hash (if (io/exists? cache-file) (io/read-file cache-file) "none")]
+    (if (= edn-hash prev-hash)
+      (log/success "Dependencies unchanged (cached). Skipping download.")
       (do
-        (log/step "Downloading dependencies to ~/.m2/repository...")
-        (maven/resolve-deps deps repos)
-        (log/success "All dependencies downloaded successfully!"))))
-  ;; Git-based dependencies
-  (let [git-deps (:git-dependencies config)
-        git-regs (or (:git-registries config) [])]
-    (if git-deps
-      (do
-        (io/mkdir-p "libs")
-        (log/step "Resolving git dependencies...")
-        (let [cache-dirs (git/resolve-git-deps git-deps git-regs config)]
-          (loop [rem cache-dirs]
-            (if (not (empty? rem))
-              (do
-                (jars/link-or-copy-jars (str (first rem) "/target") "libs")
-                (jars/link-or-copy-jars (str (first rem) "/libs") "libs")
-                (recur (rest rem)))))
-          (log/success "Git dependencies resolved!")))))
+        (let [repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
+              main-deps (if (:dependencies config) (:dependencies config) [])
+              test-deps (if (:test-dependencies config) (:test-dependencies config) [])
+              deps (concat main-deps test-deps)]
+          (if (> (count deps) 0)
+            (do
+              (log/step "Downloading dependencies to ~/.m2/repository...")
+              (maven/resolve-deps deps repos)
+              (log/success "All dependencies downloaded successfully!"))))
+        ;; Git-based dependencies
+        (let [git-deps (:git-dependencies config)
+              git-regs (or (:git-registries config) [])]
+          (if git-deps
+            (do
+              (io/mkdir-p "libs")
+              (log/step "Resolving git dependencies...")
+              (let [cache-dirs (git/resolve-git-deps git-deps git-regs config)]
+                (loop [rem cache-dirs]
+                  (if (not (empty? rem))
+                    (do
+                      (jars/link-or-copy-jars (str (first rem) "/target") "libs")
+                      (jars/link-or-copy-jars (str (first rem) "/libs") "libs")
+                      (recur (rest rem)))))
+                (log/success "Git dependencies resolved!")))))
+        (io/mkdir-p cache-dir)
+        (io/write-file cache-file edn-hash))))
   ;; Local dependencies
   (let [local-deps (:local-dependencies config)]
     (if local-deps
