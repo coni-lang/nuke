@@ -299,7 +299,8 @@
       (if (and cache-enabled cache-zip (io/exists? cache-zip))
         (do
           (log/step "Restoring from build cache...")
-          (shell/sh (str "unzip -o -q " cache-zip " -d ."))
+          (io/mkdir-p "classes")
+          (shell/sh (str "unzip -o -q " cache-zip " -d classes"))
           (io/write-file "classes/.last_compile" "")
           (log/success (str "Restored from cache: " cache-key)))
         (if (> (count java-files) 0)
