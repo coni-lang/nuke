@@ -28,6 +28,44 @@
 
 
 
+(defn get-app-version [config]
+  (let [v (:version config)]
+    (if (string? v)
+      v
+      (let [strategy (if (keyword? v) v :git-describe)]
+        (cond
+          (or (= strategy :git-commits) (= strategy :git-lines))
+          (let [res (shell/sh "git rev-list --count HEAD")]
+            (if (= 0 (:code res)) (str/trim (:stdout res)) "1.0.0"))
+
+          (= strategy :git-sha)
+          (let [res (shell/sh "git rev-parse --short HEAD")]
+            (if (= 0 (:code res)) (str/trim (:stdout res)) "1.0.0"))
+            
+          (= strategy :git-branch)
+          (let [res (shell/sh "git rev-parse --abbrev-ref HEAD")]
+            (if (= 0 (:code res)) (str/trim (:stdout res)) "1.0.0"))
+            
+          (= strategy :git-commit-date)
+          (let [res (shell/sh "git log -1 --format=%cd --date=format:'%Y.%m.%d'")]
+            (if (= 0 (:code res)) (str/trim (:stdout res)) "1.0.0"))
+
+          (= strategy :date)
+          (let [res (shell/sh "date +%Y.%m.%d")]
+            (if (= 0 (:code res)) (str/trim (:stdout res)) "1.0.0"))
+            
+          (= strategy :datetime)
+          (let [res (shell/sh "date +%Y.%m.%d.%H.%M.%S")]
+            (if (= 0 (:code res)) (str/trim (:stdout res)) "1.0.0"))
+            
+          (= strategy :epoch)
+          (let [res (shell/sh "date +%s")]
+            (if (= 0 (:code res)) (str/trim (:stdout res)) "1.0.0"))
+
+          :else
+          (let [res (shell/sh "git describe --tags --always --dirty")]
+            (if (= 0 (:code res)) (str/trim (:stdout res)) "1.0.0")))))))
+
 (defn get-default-zip-files []
   (if (io/exists? "target")
     (let [files (io/read-dir "target")]
@@ -397,7 +435,7 @@
       (if (io/exists? res-dir)
         (io/copy-dir-contents res-dir classes-dir)
         nil))
-    (let [app-version (or (:version config) "1.0.0")
+    (let [app-version (get-app-version config)
           app-name (or (:name config) "app")
           tname (:task-name config)
           suffix (if (and tname (not (= tname task-id))) (str "-" tname) "")
@@ -429,7 +467,7 @@
 
 (defn generate-pom [config]
   (let [name (or (:name config) "app")
-        version (or (:version config) "1.0.0")
+        version (get-app-version config)
         group-id (or (:group-id config) "com.example")
         deps (:dependencies config)
         deps-xml (if deps
@@ -655,7 +693,7 @@
       (log/step (str "Uploading to Nexus" (if deploy-name (str " (" deploy-name ")") "") "..."))
       (let [pom-content (generate-pom config)]
         (io/write-file "target/pom.xml" pom-content)
-        (let [app-version (or (:version config) "1.0.0")
+        (let [app-version (get-app-version config)
               app-name (or (:name config) "app")
               group-id (or (:group-id config) "com.example")
               tname (:task-name config)
@@ -718,7 +756,7 @@
   (exec-upload-impl config "-uberjar.jar"))
 
 (defn exec-zip [config]
-  (let [app-version (or (:version config) "1.0.0")
+  (let [app-version (get-app-version config)
         app-name (or (:name config) "app")
         tname (:task-name config)
         suffix (if (and tname (not (= tname "zip"))) (str "-" tname) "")
@@ -747,7 +785,7 @@
               (if (io/exists? in-file)
                 (let [content (io/read-file in-file)
                       name (or (:name config) "unknown")
-                      version (or (:version config) "unknown")
+                      version (get-app-version config)
                       res1 (str/replace content "${name}" name)
                       res2 (str/replace res1 "${version}" version)]
                   (io/make-parents out-file)
@@ -811,7 +849,7 @@
 (defn show-info [config]
   (println "Project Metadata:")
   (println (str "  Name: " (or (:name config) "app")))
-  (println (str "  Version: " (or (:version config) "1.0.0")))
+  (println (str "  Version: " (get-app-version config)))
   (println (str "  Main-Class: " (or (:main-class config) "None")))
   (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
         test-dir (or (:test-dir config) (if (io/exists? "src/tests") "src/tests" "src/test"))
