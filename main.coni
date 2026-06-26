@@ -319,11 +319,78 @@
       (io/write-file argfile-path escaped-content))
     argfile-path))
 
+(defn exec-jaxb [config]
+  (let [jaxb-cfg (:jaxb config)]
+    (if jaxb-cfg
+      (let [src-dir (or (:src-dir jaxb-cfg) "src/main/resources/schema")
+            out-dir (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb")
+            version (or (:version jaxb-cfg) "4.0.5")
+            repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
+            deps [(str "org.glassfish.jaxb:jaxb-xjc:" version)
+                  (str "org.glassfish.jaxb:jaxb-core:" version)
+                  (str "org.glassfish.jaxb:jaxb-runtime:" version)
+                  (str "org.glassfish.jaxb:codemodel:" version)
+                  (str "org.glassfish.jaxb:xsom:" version)
+                  (str "org.glassfish.jaxb:txw2:" version)
+                  (str "com.sun.istack:istack-commons-tools:" (if (str/starts-with? version "4.") "4.1.2" "3.0.12"))
+                  (str "com.sun.istack:istack-commons-runtime:" (if (str/starts-with? version "4.") "4.1.2" "3.0.12"))
+                  (str "com.sun.xml.dtd-parser:dtd-parser:" (if (str/starts-with? version "4.") "1.5.1" "1.4.1"))
+                  (if (str/starts-with? version "4.") "com.sun.xml.bind.external:rngom:4.0.5" "com.sun.xml.bind.external:rngom:2.3.9")
+                  (if (str/starts-with? version "4.") "com.sun.xml.bind.external:relaxng-datatype:4.0.5" "com.sun.xml.bind.external:relaxng-datatype:2.3.9")
+                  (if (str/starts-with? version "4.") "jakarta.xml.bind:jakarta.xml.bind-api:4.0.2" "javax.xml.bind:jaxb-api:2.3.1")
+                  (if (str/starts-with? version "4.") "com.sun.activation:jakarta.activation:2.0.1" "javax.activation:activation:1.1.1")]]
+        (if (io/exists? src-dir)
+          (let [xsd-files (io/find-files src-dir ".xsd")]
+            (if (> (count xsd-files) 0)
+              (do
+                (log/step (str "Generating JAXB classes into " out-dir "..."))
+                (io/mkdir-p out-dir)
+                (let [resolved-jars (maven/resolve-deps deps repos)
+                      cp (str/join (if (= (sys-os-name) "windows") ";" ":") resolved-jars)
+                      args-list (or (:args jaxb-cfg) [])
+                      args-str (if (empty? args-list) "" (str " " (str/join " " args-list)))
+                      cmd (str (java/get-java-bin config "java") " -cp " (io/quote-path cp) " com.sun.tools.xjc.Driver" args-str " -d " (io/quote-path out-dir) " " (str/join " " (map io/quote-path xsd-files)))
+                      res (shell/sh cmd)]
+                  (if (not (= 0 (:code res)))
+                    (do
+                      (log/error "JAXB Generation failed!")
+                      (println (:stderr res))
+                      (println (:stdout res))
+                      (sys-exit 1))
+                    (do
+                      ;; Patching
+                      (let [patches (:patches jaxb-cfg)]
+                        (if patches
+                          (do
+                            (log/info "Applying JAXB patches...")
+                            (let [gen-files (io/find-files out-dir ".java")]
+                              (loop [rem-files gen-files]
+                                (if (empty? rem-files) nil
+                                  (let [f (first rem-files)
+                                        content (io/read-file f)
+                                        fname (io/file-name f)
+                                        new-content (loop [rem-patches patches c content]
+                                                      (if (empty? rem-patches) c
+                                                        (let [p (first rem-patches)
+                                                              ptarget (:file p)
+                                                              pregex (:regex p)
+                                                              prepl (:replacement p)]
+                                                          (if (and pregex (not (nil? prepl)) (or (not ptarget) (= ptarget fname)))
+                                                            (recur (rest rem-patches) (str/replace c pregex prepl))
+                                                            (recur (rest rem-patches) c)))))]
+                                    (if (not= content new-content)
+                                      (io/write-file f new-content))
+                                    (recur (rest rem-files)))))))))
+                      (log/success "JAXB generation successful!"))))))))))))
+
 (defn exec-compile [config]
   (io/mkdir-p "classes")
   (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
         cache-enabled (if (contains? config :build-cache) (:build-cache config) true)
-        java-files (io/find-files src-dir ".java")
+        java-files (let [base-files (io/find-files src-dir ".java")
+                         jaxb-cfg (:jaxb config)
+                         jaxb-files (if jaxb-cfg (io/find-files (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb") ".java") [])]
+                     (concat base-files jaxb-files))
         cp-jars (get-classpath-jars config ".")
         cache-key (if cache-enabled
                     (let [src-hash (if (> (count java-files) 0) (hash-directory src-dir ".java") "empty")
@@ -805,7 +872,8 @@
 (register-task "template" [] "Process source templates" exec-template)
 (register-task "download-deps" [] "Download project dependencies" exec-download-deps)
 (register-task "classpath" [] "Print the project classpath" exec-classpath)
-(register-task "compile" ["template" "download-deps"] "Compile Java source files" exec-compile)
+(register-task "jaxb" ["download-deps"] "Generate Java classes from XSD schemas" exec-jaxb)
+(register-task "compile" ["template" "download-deps" "jaxb"] "Compile Java source files" exec-compile)
 (register-task "test" ["compile"] "Run JUnit tests" exec-test)
 (register-task "run" ["compile"] "Run the Java application" exec-run)
 (register-task "jar" ["compile"] "Create a standard thin jar" exec-jar)

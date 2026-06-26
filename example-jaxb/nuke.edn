@@ -1,0 +1,8 @@
+{:name "jaxb-test"
+ :version "1.0.0"
+ :dependencies ["jakarta.xml.bind:jakarta.xml.bind-api:4.0.2"]
+ :jaxb {:src-dir "src/main/resources/schema"
+        :out-dir "target/jaxb-gen"
+        :version "4.0.5"
+        :patches [{:regex "protected String name;" :replacement "protected String name; // Patched by Nuke!"}]}
+ :main-class "Main"}

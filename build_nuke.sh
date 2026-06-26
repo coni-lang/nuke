@@ -12,7 +12,16 @@ sed -i.bak "s~(def nuke-build-time .*~(def nuke-build-time \"$DATE\")~g" .build/
 sed -i.bak "s~(def nuke-commit-msg .*~(def nuke-commit-msg \"$MSG\")~g" .build/main.coni
 rm -f .build/main.coni.bak
 
-COMPILER=${CONI_COMPILER:-coni}
+CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang}
+if [ -z "$CONI_COMPILER" ]; then
+    if [ -f "$CONI_HOME/coni" ]; then
+        COMPILER="$CONI_HOME/coni"
+    else
+        COMPILER="coni"
+    fi
+else
+    COMPILER="$CONI_COMPILER"
+fi
 
 if [ "$BUILD_ALL" = "1" ]; then
     CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $COMPILER build .build/main.coni -o nuke-mac
