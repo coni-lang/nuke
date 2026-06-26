@@ -775,7 +775,7 @@
 (register-task "zip" ["uberjar"] "Create a distribution zip" exec-zip)
 (register-task "upload" ["jar"] "Upload the jar and POM to Nexus" exec-upload)
 (register-task "upload-uberjar" ["zip"] "Upload the uberjar and POM to Nexus" exec-upload-uberjar)
-(register-task "build" ["upload-uberjar"] "Run the full build pipeline" (fn [config] (log/success "Build complete.")))
+(register-task "build" ["zip"] "Run the full build pipeline locally" (fn [config] (log/success "Build complete.")))
 (register-task "clean-git-deps" [] "Clear the global git dependency cache (~/.nuke/git-deps)" (fn [config] (git/clean-git-cache)))
 (register-task "dependencies" [] "Show recursively dependencies (local, maven, git)" exec-dependencies)
 
