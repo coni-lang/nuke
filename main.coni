@@ -85,11 +85,15 @@
                                         (if (empty? crem) cacc
                                           (let [cdep (first crem)
                                                 cv (:version cdep)
+                                                cg (:groupId cdep)
+                                                ca (:artifactId cdep)
                                                 cv-resolved (maven/resolve-placeholder cv props self parent)
+                                                cg-resolved (maven/resolve-placeholder cg props self parent)
+                                                ca-resolved (maven/resolve-placeholder ca props self parent)
                                                 cv-final (if (or (= cv-resolved "") (nil? cv-resolved))
                                                            (or (:version cdep) "")
                                                            cv-resolved)]
-                                            (recur (rest crem) (conj cacc (str (:groupId cdep) ":" (:artifactId cdep) ":" cv-final))))))]
+                                            (recur (rest crem) (conj cacc (str cg-resolved ":" ca-resolved ":" cv-final))))))]
               (print-maven-tree resolved-child-deps repos (+ mdepth 1)))))
         (recur (rest rem))))))
 
