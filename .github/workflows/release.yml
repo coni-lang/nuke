@@ -26,10 +26,7 @@ jobs:
           go-version: '1.22'
           cache: true
           
-      - name: Checkout Coni-lang
-        run: |
-          git clone https://gitea.hellonico.info/hellonico/coni-lang.git $(pwd)/coni-lang
-          
+
       - name: Setup Coni
         uses: coni-lang/npkm/.github/actions/setup-coni@main
 
@@ -41,7 +38,7 @@ jobs:
           
       - name: Build and Package Release
         run: |
-          CONI_COMPILER=coni CONI_HOME=$(pwd)/coni-lang npkm package_release.edn
+          npkm package_release.edn
           
       - name: Create Release
         uses: softprops/action-gh-release@v2
