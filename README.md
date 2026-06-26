@@ -76,7 +76,8 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:local-dependencies` - List of local Nuke projects to build and link.
 - `:git-registries` - List of base git URLs used to resolve short dependency names (see [Git Dependencies](#git-dependencies)).
 - `:git-dependencies` - List of git-based dependencies in `"name#ref"` or `"url#ref"` format (see [Git Dependencies](#git-dependencies)).
-- `:analysis` - (New) Configuration block for JaCoCo, Error Prone, SonarQube, PMD, SpotBugs, and Checkstyle.
+- `:jaxb` - (New) Configuration block for dynamic JAXB schema code generation and regex patching.
+- `:analysis` - Configuration block for JaCoCo, Error Prone, SonarQube, PMD, SpotBugs, and Checkstyle.
 - `:templates` - List of template files to process (variables like `${name}` and `${version}` will be replaced, and the `.template` extension will be stripped from the output).
 - `:main-class` - Fully qualified class name to execute with `nuke run` or to embed in Jar manifests.
 - `:java-home` - Optional override for `$JAVA_HOME`.
@@ -268,6 +269,8 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 - **Bug Fix**: Fixed `build-dep-jar` jar packaging — classes were nested under an extra `classes/` prefix.
 - **Dependencies Tree**: New `nuke dependencies` task to print a recursive tree of all local, Maven, and Git dependencies.
 - **Onefetch Integration**: Added the `nuke onefetch` command to display a beautiful CLI summary of a local or remote Git repository, including file counts, license detection, and a 52-week commit activity matrix.
+- **Dynamic App Versioning**: Nuke now natively supports resolving your project `:version` string dynamically using keywords like `:git-branch`, `:git-sha`, `:git-commits`, `:epoch`, `:date`, `:datetime`, or `:git-describe`.
+- **JAXB Support**: Integrated native JAXB schema compilation directly into the Nuke build lifecycle. Supports configuring specific JAXB `xjc` tooling versions and applying regex patches to generated Java files in memory prior to Java compilation.
 - **Timezone Fix**: Fixed `nuke -v` displaying incorrect timezones on macOS by standardizing to the numeric timezone offset (`+0900`).
 
 ### v1.1.0
