@@ -688,7 +688,7 @@
                               (recur (rest lines)))))
                       
                       ;; JSON Generators
-                      escape-js (fn [s] (str/replace s "\"" "\\\""))
+                      escape-js (fn [s] (str/replace (str/replace s "\\" "\\\\") "\"" "\\\""))
                       to-js-arr (fn [lst] (str "[" (str/join "," (map (fn [x] (str "\"" (escape-js x) "\"")) lst)) "]"))
                       
                       js-unused (str "{" (str/join "," 
