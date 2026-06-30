@@ -1,0 +1,13 @@
+{:name "example-java-scopes"
+ :version "1.0.0"
+ :group-id "com.example"
+ 
+ :main-class "com.example.Main"
+ :src-dir "src/main"
+ 
+ :dependencies {
+   :compile ["org.apache.commons:commons-lang3:3.12.0"]
+   :provided ["javax.servlet:javax.servlet-api:4.0.1"]
+   :test ["junit:junit:4.13.2"]
+ }
+}

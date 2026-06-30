@@ -251,7 +251,7 @@
       (log/success "Dependencies unchanged (cached). Skipping download.")
       (do
         (let [repos (or (:repositories config) ["https://repo1.maven.org/maven2"])
-              main-deps (if (:dependencies config) (:dependencies config) [])
+              main-deps (let [raw (or (:dependencies config) [])] (jars/resolve-scoped-deps raw "all"))
               test-deps (if (:test-dependencies config) (:test-dependencies config) [])
               deps (concat main-deps test-deps)]
           (if (> (count deps) 0)
@@ -297,8 +297,8 @@
 
 
 
-(defn get-classpath-jars [config base-path]
-  (jars/get-classpath-jars config base-path))
+(defn get-classpath-jars [config base-path target-scope]
+  (jars/get-classpath-jars config base-path target-scope))
 
 (defn hash-directory [dir ext]
   (let [files (io/find-files dir ext)
@@ -306,7 +306,7 @@
     (sys-md5 (str/join "," file-hashes))))
 
 (defn exec-classpath [config]
-  (println (get-classpath-jars config ".")))
+  (println (get-classpath-jars config "." "all")))
 
 ;; Write an argfile for javac/java to avoid Windows command-line length limits.
 ;; Returns the path to the argfile (caller passes it as @path).
@@ -391,7 +391,7 @@
                          jaxb-cfg (:jaxb config)
                          jaxb-files (if jaxb-cfg (io/find-files (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb") ".java") [])]
                      (concat base-files jaxb-files))
-        cp-jars (get-classpath-jars config ".")
+        cp-jars (get-classpath-jars config "." "compile")
         cache-key (if cache-enabled
                     (let [src-hash (if (> (count java-files) 0) (hash-directory src-dir ".java") "empty")
                           cp-hash (sys-md5 (str/join "," cp-jars))]
@@ -424,7 +424,7 @@
                                 jar-path)
                               (str jdk-exports " -XDcompilePolicy=simple -processorpath " (io/quote-path jar-path) " -Xplugin:ErrorProne"))
                             "")
-                  cp-jars (get-classpath-jars config ".")
+                  cp-jars (get-classpath-jars config "." "compile")
                   encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
                   opts-arg (if (:javac-opts config) (str/join " " (:javac-opts config)) "")
                   java-version-arg (if (:java-version config) (str "--release " (:java-version config))
@@ -487,7 +487,7 @@
     (if is-uberjar
       (do
         (log/info "Unzipping dependency jars...")
-        (let [cp-jars (get-classpath-jars config ".")
+        (let [cp-jars (get-classpath-jars config "." (if is-uberjar "uberjar" "compile"))
               jars (filter (fn [x] (not (empty? x))) (str/split cp-jars io/classpath-separator))]
           (loop [rem-jars jars]
             (if (not (empty? rem-jars))
@@ -611,7 +611,7 @@
       (log/warn "No java files found. Skipping dependency analysis.")
       (do
         (log/step "Running javac with -verbose to track dependencies...")
-        (let [cp-jars (get-classpath-jars config ".")
+        (let [cp-jars (get-classpath-jars config "." "compile")
               encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
               java-version-arg (if (:java-version config) (str "--release " (:java-version config))
                                 (if (and (:java-source config) (:java-target config))
@@ -1066,11 +1066,7 @@ window.onload = () => {
               (if (> (count java-files) 0)
                 (do
                   (log/step "Running tests...")
-                  (let [test-deps (if (:test-dependencies config) (:test-dependencies config) [])
-                        main-deps (if (:dependencies config) (:dependencies config) [])
-                        all-deps (concat main-deps test-deps)
-                        test-config (assoc config :dependencies all-deps)
-                        cp-jars (get-classpath-jars test-config ".")
+                  (let [cp-jars (get-classpath-jars config "." "test")
                         test-cp-str (str "classes" io/classpath-separator "test-classes" (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))
                         env-javac-opts (let [env-opts (sys-env-get "JAVAC_OPTS")]
                                          (if (and env-opts (not (= env-opts ""))) (str/split env-opts " ") []))
@@ -1165,7 +1161,7 @@ window.onload = () => {
         (sys-exit 1))
       (do
         (log/step (str "Running " main-class "..."))
-        (let [cp-jars (get-classpath-jars config ".")
+        (let [cp-jars (get-classpath-jars config "." "run")
               res-dir (or (:resource-dir config) "src/main/resources")
               run-cp-str (str "classes" (if (io/exists? res-dir) (str io/classpath-separator res-dir) "") (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))
               env-java-opts (let [env-opts (sys-env-get "JAVA_OPTS")]
