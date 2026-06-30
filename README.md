@@ -35,6 +35,13 @@ In your project root, run `nuke <task>`. If no task is provided, `nuke build` is
 - `nuke info` - Display project metadata
 - `nuke onefetch` - Display a comprehensive git repository summary (stats, language breakdown, and commit matrix)
 
+### Skipping Tasks
+
+You can dynamically skip any task in the dependency graph by passing the `--skip` flag or its variants:
+- `--skip <task-name>` (e.g. `nuke uberjar --skip test`)
+- `--skip-<task-name>` (e.g. `nuke uberjar --skip-test`)
+- `--skip-<task-name>s` (e.g. `nuke uberjar --skip-tests`)
+
 ## Configuration (`nuke.edn`)
 
 The build configuration is stored in `nuke.edn` in the root of your project.
