@@ -98,6 +98,27 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:deploy` - Nexus deployment URL (string) or a map of multiple deployment targets (e.g., `{:nexus1 "url1" :nexus2 "url2"}`).
 - `:tasks` - A map of custom task definitions.
 
+## Dependency Scoping
+
+Nuke allows you to specify fine-grained scopes for your Maven dependencies using a map. This strictly segregates classpaths for compilation, testing, and application bundling, mirroring advanced build tools without the bloat.
+
+```edn
+:dependencies {
+  ;; :compile - The default scope. Included everywhere.
+  :compile  ["org.apache.commons:commons-lang3:3.12.0"]
+  
+  ;; :provided - Included in `nuke run`, `nuke compile`, and `nuke test`. 
+  ;; EXCLUDED from `nuke uberjar` (since the deployment container provides it).
+  :provided ["javax.servlet:javax.servlet-api:4.0.1"]
+  
+  ;; :test - Included ONLY during `nuke test`.
+  ;; EXCLUDED from `nuke run`, `nuke compile`, and `nuke uberjar`.
+  :test     ["junit:junit:4.13.2"]
+}
+```
+
+If you specify an array instead of a map (`:dependencies ["group:artifact:version"]`), Nuke will gracefully fallback to treating all dependencies as `:compile` scoped. See `nuke/example-java-scopes` for a complete example.
+
 ## Git Dependencies
 
 Nuke supports pulling dependencies directly from git repositories, eliminating the need for a Nexus server for internal/team libraries. Dependencies are specified as `"name#ref"` where `ref` can be a **tag** (e.g., `v1.3.0`) or a **branch** (e.g., `main`, `develop`).
