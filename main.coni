@@ -559,6 +559,42 @@
          "  </dependencies>\n"
          "</project>\n")))
 
+(defn parse-g-a-v-from-m2 [path]
+  (let [idx (str/index-of (str/replace path "\\" "/") ".m2/repository/")]
+    (if (>= idx 0)
+      (let [rel-path (subs (str/replace path "\\" "/") (+ idx 15) (count path))
+            parts (str/split rel-path "/")
+            len (count parts)]
+        (if (>= len 4)
+          (let [filename (get parts (- len 1))
+                v (get parts (- len 2))
+                a (get parts (- len 3))
+                g-parts (subvec parts 0 (- len 3))
+                g (str/join "." g-parts)]
+            {:g g :a a :v v :filename filename})
+          nil))
+      nil)))
+
+(defn get-origin [jar-path repos]
+  (let [origin-path (str jar-path ".origin")]
+    (if (io/exists? origin-path)
+      (str/trim (io/read-file origin-path))
+      (let [gav (parse-g-a-v-from-m2 jar-path)]
+        (if gav
+          (let [urls (maven/make-urls (:g gav) (:a gav) (:v gav) "jar" repos)
+                found-url (loop [rem urls]
+                            (if (empty? rem)
+                              "Unknown"
+                              (let [url (first rem)
+                                    res (shell/sh (str "curl -sI -o /dev/null -w \"%{http_code}\" \"" url "\""))]
+                                (if (= (str/trim (:stdout res)) "200")
+                                  url
+                                  (recur (rest rem))))))]
+            (if (not= found-url "Unknown")
+              (io/write-file origin-path found-url))
+            found-url)
+          "Local")))))
+
 (defn exec-analyze-deps [config]
   (let [args (sys-os-args)
         report-type (loop [rem args]
@@ -655,12 +691,18 @@
                       escape-js (fn [s] (str/replace s "\"" "\\\""))
                       to-js-arr (fn [lst] (str "[" (str/join "," (map (fn [x] (str "\"" (escape-js x) "\"")) lst)) "]"))
                       
-                      js-unused (to-js-arr unused-jars)
+                      js-unused (str "{" (str/join "," 
+                                         (map (fn [j]
+                                                (let [origin (get-origin j (or (:repositories config) []))]
+                                                  (str "\"" (escape-js j) "\": {origin: \"" (escape-js origin) "\"}")))
+                                              unused-jars))
+                                   "}")
                       js-used (str "{" (str/join "," 
                                          (map (fn [j]
                                                 (let [info (get @jar-infos j {:version "?" :date "?"})
+                                                      origin (get-origin j (or (:repositories config) []))
                                                       classes (get @jar-to-classes j [])]
-                                                  (str "\"" (escape-js j) "\": {version: \"" (:version info) "\", date: \"" (:date info) "\", classes: " (to-js-arr classes) "}")))
+                                                  (str "\"" (escape-js j) "\": {version: \"" (:version info) "\", date: \"" (:date info) "\", origin: \"" (escape-js origin) "\", classes: " (to-js-arr classes) "}")))
                                               used-jars-list))
                                    "}")
                       
@@ -757,17 +799,26 @@ function buildJarTreeHtml(jarsObj, isUsed) {
         })) {
             const nodePath = currentPath ? currentPath + '/' + k : k;
             if (v.isJar) {
+                const info = v.data || {};
+                let originHtml = '';
+                if (info.origin && info.origin !== 'Local/Unknown' && info.origin !== 'Unknown' && info.origin !== 'Local') {
+                    let o = info.origin;
+                    let displayUrl = o;
+                    try { displayUrl = new URL(o).hostname; } catch(e) {}
+                    originHtml = `<a href=\"${o}\" target=\"_blank\" class=\"badge badge-origin\" style=\"background:#0284c7; color:#f0f9ff; text-decoration:none;\">&#127760; ${displayUrl}</a>`;
+                }
+                
                 if (!isUsed) {
-                    html += `<li><span class=\"unused-item\">&#128196; ${k}</span></li>`;
+                    html += `<li><span class=\"unused-item\">&#128196; ${k} ${originHtml}</span></li>`;
                 } else {
-                    const info = v.data;
                     const id = 'jar-classes-' + Math.random().toString(36).substr(2, 9);
                     html += `<li>
                         <div class=\"jar-item\" onclick=\"event.stopPropagation(); document.getElementById('${id}').classList.toggle('hidden')\">
                             &#128194; <span style='color:#f8fafc; font-weight:500;'>${k}</span>
-                            <span class=\"badge\" style=\"margin-left:auto;\">${info.classes.length} classes</span>
-                            <span class=\"badge badge-version\">Java ${info.version}</span>
-                            <span class=\"badge badge-date\">&#128197; ${info.date}</span>
+                            <span class=\"badge\" style=\"margin-left:auto;\">${info.classes ? info.classes.length : 0} classes</span>
+                            <span class=\"badge badge-version\">Java ${info.version || '?'}</span>
+                            <span class=\"badge badge-date\">&#128197; ${info.date || '?'}</span>
+                            ${originHtml}
                         </div>
                         <div id=\"${id}\" class=\"hidden\" style=\"padding: 10px 20px; background: #0f172a; border-radius: 8px; margin-top: 4px; margin-bottom: 4px; border-left: 1px solid #334155;\">
                             ${renderTree(info.classes)}
@@ -806,10 +857,10 @@ function renderJars(type) {
     const filtered = {};
     
     if (type === 'unused') {
-        for (const j of unusedJars) {
+        for (const [j, info] of Object.entries(unusedJars)) {
             if (hideJdk && !j.includes('/')) continue;
             if (j.toLowerCase().includes(term)) {
-                filtered[j] = null;
+                filtered[j] = info;
                 count++;
             }
         }
