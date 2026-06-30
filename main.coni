@@ -614,7 +614,7 @@
                     (let [existing (get @jar-to-classes mod-name [])]
                       (swap! jar-to-classes assoc mod-name (conj existing class-path)))))
                 (recur (rest rem)))))
-          (let [all-jars (into #{} (str/split cp-jars ":"))
+          (let [all-jars (into #{} (str/split cp-jars io/classpath-separator))
                 used-jars (into #{} (keys @jar-to-classes))
                 unused-jars (filter (fn [j] (and (str/ends-with? j ".jar")
                                                  (not (contains? used-jars j))))
@@ -712,10 +712,11 @@ function basename(path) {
 }
 
 function normalizeJarPath(path) {
-    if (!path.includes('/')) return 'JDK Modules/' + path;
-    const m2Idx = path.indexOf('.m2/repository/');
-    if (m2Idx > -1) return path.substring(m2Idx + 15);
-    return path.startsWith('/') ? path.substring(1) : path;
+    let normalized = path.replace(/\\\\/g, '/');
+    if (!normalized.includes('/')) return 'JDK Modules/' + normalized;
+    const m2Idx = normalized.indexOf('.m2/repository/');
+    if (m2Idx > -1) return normalized.substring(m2Idx + 15);
+    return normalized.startsWith('/') ? normalized.substring(1) : normalized;
 }
 
 function switchTab(tabId) {
