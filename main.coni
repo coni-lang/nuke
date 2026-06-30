@@ -748,12 +748,13 @@ function buildJarTreeHtml(jarsObj, isUsed) {
         }
     }
     
-    function buildHtml(node) {
+    function buildHtml(node, currentPath) {
         let html = '<ul class=\"tree\">';
         for (const [k, v] of Object.entries(node).sort((a,b) => {
             if (!!a[1].isJar === !!b[1].isJar) return a[0].localeCompare(b[0]);
             return a[1].isJar ? 1 : -1;
         })) {
+            const nodePath = currentPath ? currentPath + '/' + k : k;
             if (v.isJar) {
                 if (!isUsed) {
                     html += `<li><span class=\"unused-item\">&#128196; ${k}</span></li>`;
@@ -773,14 +774,26 @@ function buildJarTreeHtml(jarsObj, isUsed) {
                     </li>`;
                 }
             } else {
+                let completelyUnused = false;
+                if (!isUsed) {
+                    completelyUnused = true;
+                    for (const u of Object.keys(usedJars)) {
+                        if (normalizeJarPath(u).startsWith(nodePath + '/')) {
+                            completelyUnused = false;
+                            break;
+                        }
+                    }
+                }
+                const extraStyle = completelyUnused ? 'color: #ef4444;' : '';
+                const extraText = completelyUnused ? \" <span style='font-size:0.75rem; color:#fca5a5; font-weight:normal;'>(completely unused)</span>\" : '';
                 const id = 'tree-' + Math.random().toString(36).substr(2, 9);
-                html += `<li><span class=\"tree-folder\" onclick=\"event.stopPropagation(); document.getElementById('${id}').classList.toggle('hidden')\">&#128193; ${k}</span><div id=\"${id}\">${buildHtml(v)}</div></li>`;
+                html += `<li><span class=\"tree-folder\" style=\"${extraStyle}\" onclick=\"event.stopPropagation(); document.getElementById('${id}').classList.toggle('hidden')\">&#128193; ${k}${extraText}</span><div id=\"${id}\">${buildHtml(v, nodePath)}</div></li>`;
             }
         }
         html += '</ul>';
         return html;
     }
-    return buildHtml(root);
+    return buildHtml(root, "");
 }
 
 function renderJars(type) {
