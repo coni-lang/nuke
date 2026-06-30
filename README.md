@@ -78,8 +78,8 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:version` - The project version.
 - `:group-id` - The Maven group ID (used for Nexus upload/POM generation).
 - `:repositories` - List of Maven repository URLs.
-- `:dependencies` - List of Maven coordinates in the format `"group:artifact:version"`.
-- `:test-dependencies` - List of Maven coordinates used exclusively during `nuke test` and excluded from `uberjar`.
+- `:dependencies` - Can be a simple array of strings (`["group:artifact:version"]`) or a Map configuring scopes (`{:compile [...] :provided [...] :test [...]}`). Scopes correctly segregate the classpath across `nuke run`, `nuke compile`, `nuke test` and cleanly exclude development libraries from `uberjar`.
+- `:test-dependencies` - (Legacy syntax) List of Maven coordinates used exclusively during `nuke test` and excluded from `uberjar`. Recommended to migrate to `:dependencies {:test [...]}` instead.
 - `:local-dependencies` - List of local Nuke projects to build and link.
 - `:git-registries` - List of base git URLs used to resolve short dependency names (see [Git Dependencies](#git-dependencies)).
 - `:git-dependencies` - List of git-based dependencies in `"name#ref"` or `"url#ref"` format (see [Git Dependencies](#git-dependencies)).
@@ -100,7 +100,7 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 
 ## Git Dependencies
 
-Nuke supports pulling dependencies directly from git repositories, eliminating the need for a Nexus server for internal/team libraries. Dependencies are specified as `"name#ref"` where `ref` can be a **tag** (e.g., `v1.2.0`) or a **branch** (e.g., `main`, `develop`).
+Nuke supports pulling dependencies directly from git repositories, eliminating the need for a Nexus server for internal/team libraries. Dependencies are specified as `"name#ref"` where `ref` can be a **tag** (e.g., `v1.3.0`) or a **branch** (e.g., `main`, `develop`).
 
 - **Tags** are immutable — once cloned and built, they are cached permanently under `~/.nuke/git-deps/`.
 - **Branches** are re-fetched on each build. If new commits are detected, the dependency is automatically rebuilt.
@@ -110,7 +110,7 @@ Nuke supports pulling dependencies directly from git repositories, eliminating t
 ```edn
 {:name "my-app"
  :version "2.0.0"
- :git-dependencies ["https://gitea.klabs.home/nico/my-utils#v1.2.0"
+ :git-dependencies ["https://gitea.klabs.home/nico/my-utils#v1.3.0"
                      "git@gitea.klabs.home:nico/other-lib#develop"]
  :main-class "com.example.Main"}
 ```
@@ -124,13 +124,13 @@ Define `:git-registries` to avoid repeating base URLs. When a dependency has no 
  :version "2.0.0"
  :git-registries ["https://gitea.klabs.home/nico"
                    "git@gitea.klabs.home:team"]
- :git-dependencies ["my-utils#v1.2.0"
+ :git-dependencies ["my-utils#v1.3.0"
                      "shared-lib#main"
                      "https://github.com/external/lib#v0.5.0"]
  :main-class "com.example.Main"}
 ```
 
-In this example, `my-utils#v1.2.0` will first try `https://gitea.klabs.home/nico/my-utils`, then `git@gitea.klabs.home:team/my-utils`. Full URLs like the GitHub one are used directly.
+In this example, `my-utils#v1.3.0` will first try `https://gitea.klabs.home/nico/my-utils`, then `git@gitea.klabs.home:team/my-utils`. Full URLs like the GitHub one are used directly.
 
 ### Subfolder Dependencies (monorepo support)
 
@@ -168,7 +168,7 @@ Additionally, Nuke features **Global Classpath Deduplication**. If your main pro
  :dependencies [{:coord "com.google.guava:guava:32.1.2-jre"
                  :exclusions ["commons-logging:commons-logging"]}]
  :git-registries ["https://gitea.klabs.home/nico"]
- :git-dependencies ["my-utils#v1.2.0"]
+ :git-dependencies ["my-utils#v1.3.0"]
  :main-class "com.example.Main"}
 ```
 *Note: Transitive dependency exclusions are fully supported by passing a map with `:exclusions` to your `:dependencies` list.*
@@ -277,7 +277,7 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 
 ## Version History
 
-### v1.2.0 (Latest)
+### v1.3.0 (Latest)
 - **Dependency Analysis**: `nuke analyze-deps` now generates an interactive HTML report featuring tabbed navigation (Utilized, Unused, and Class Origins), a tree-based hierarchical view of Maven groups, and automatic detection of Java compiler versions and build dates from JARs. Completely unused JAR groups are visually highlighted in red.
 - **Multiple Deploy Targets**: `:deploy` can now be a map of named repositories. Specify the target using `nuke upload <target-name>` or `nuke upload-uberjar <target-name>`. If target is omitted, Nuke will fail-fast and list available options. The IntelliJ plugin adds a gutter menu option for each deployment target.
 - **Git-Based Dependencies**: Pull dependencies directly from git repositories instead of Nexus. Supports tags (cached permanently) and branches (re-fetched and rebuilt on new commits).
