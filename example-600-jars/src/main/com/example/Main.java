@@ -31,6 +31,12 @@ public class Main {
         info.put("jarCount", "~600");
         System.out.println("Info: " + mapper.writeValueAsString(info));
 
+        // Trigger more dependencies to be loaded
+        org.springframework.boot.SpringApplication app;
+        org.hibernate.Session session;
+        org.apache.camel.CamelContext camel;
+        org.postgresql.Driver pg;
+
         System.out.println("=== compile + run succeeded! ===");
     }
 }

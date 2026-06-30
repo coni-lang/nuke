@@ -559,6 +559,379 @@
          "  </dependencies>\n"
          "</project>\n")))
 
+(defn exec-analyze-deps [config]
+  (let [args (sys-os-args)
+        report-type (loop [rem args]
+                      (if (empty? rem) "html"
+                        (if (or (= (first rem) "--report") (= (first rem) "-report"))
+                          (if (> (count rem) 1) (get rem 1) "html")
+                          (recur (rest rem)))))
+        src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        java-files (let [base-files (io/find-files src-dir ".java")
+                         jaxb-cfg (:jaxb config)
+                         jaxb-files (if jaxb-cfg (io/find-files (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb") ".java") [])]
+                     (concat base-files jaxb-files))]
+    (if (empty? java-files)
+      (log/warn "No java files found. Skipping dependency analysis.")
+      (do
+        (log/step "Running javac with -verbose to track dependencies...")
+        (let [cp-jars (get-classpath-jars config ".")
+              encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
+              java-version-arg (if (:java-version config) (str "--release " (:java-version config))
+                                (if (and (:java-source config) (:java-target config))
+                                    (str "-source " (:java-source config) " -target " (:java-target config)) ""))
+              tmp-classes ".nuke-tmp/deps-classes"
+              _ (io/mkdir-p tmp-classes)
+              argfile-args (reduce concat []
+                             [["-d" tmp-classes "-verbose"]
+                              (if (empty? cp-jars) [] ["-cp" (io/quote-path cp-jars)])
+                              (if (empty? encoding-arg) [] [(str "-encoding") (:encoding config)])
+                              (if (empty? java-version-arg) [] (str/split java-version-arg " "))
+                              java-files])
+              argfile-path (write-argfile argfile-args "deps-compile-args.txt")
+              cmd (str (java/get-java-bin config "javac") " @" argfile-path)
+              res (shell/sh cmd)
+              out-str (str (:stderr res) "\n" (:stdout res))
+              lines (str/split out-str "\n")
+              loaded-lines (filter (fn [l] (str/starts-with? l "[loading ")) lines)
+              class-to-jar (atom {})
+              jar-to-classes (atom {})]
+          (loop [rem loaded-lines]
+            (if (not (empty? rem))
+              (let [l (first rem)
+                    inner (subs l 9 (- (count l) 1))
+                    idx (str/index-of inner "(")]
+                (if (not (= idx -1))
+                  (let [jar-path (subs inner 0 idx)
+                        class-path (subs inner (+ idx 1) (- (count inner) 1))]
+                    (swap! class-to-jar assoc class-path jar-path)
+                    (let [existing (get @jar-to-classes jar-path [])]
+                      (swap! jar-to-classes assoc jar-path (conj existing class-path))))
+                  (let [parts (str/split inner "/")
+                        mod-name (if (> (count parts) 2) (get parts 2) "unknown-module")
+                        class-path (str/join "/" (subvec parts 3 (count parts)))]
+                    (swap! class-to-jar assoc class-path mod-name)
+                    (let [existing (get @jar-to-classes mod-name [])]
+                      (swap! jar-to-classes assoc mod-name (conj existing class-path)))))
+                (recur (rest rem)))))
+          (let [all-jars (into #{} (str/split cp-jars ":"))
+                used-jars (into #{} (keys @jar-to-classes))
+                unused-jars (filter (fn [j] (and (str/ends-with? j ".jar")
+                                                 (not (contains? used-jars j))))
+                                    all-jars)
+                used-jars-list (keys @jar-to-classes)]
+            (if (= report-type "cli")
+              (do
+                (println "\n\033[36m=== Dependency Analysis Report ===\033[0m")
+                (println (str "Classes loaded: " (count (keys @class-to-jar))))
+                (println (str "Jars/Modules utilized: " (count used-jars-list)))
+                (println (str "Total Classpath Jars: " (count all-jars)))
+                (println (str "\n\033[31m=== Unused Compile-Time Jars (" (count unused-jars) ") ===\033[0m"))
+                (loop [rem unused-jars]
+                  (if (not (empty? rem))
+                    (do (println (str "  - " (first rem))) (recur (rest rem)))))
+                (println ""))
+              (do
+                (log/info "Generating HTML report (target/deps-report.html)...")
+                (io/mkdir-p "target")
+                
+                ;; Extract Java version and date from jars
+                (io/write-file ".nuke-tmp/ClassInfo.java" "import java.util.zip.*;\nimport java.io.*;\nimport java.util.*;\nimport java.text.SimpleDateFormat;\npublic class ClassInfo {\n    public static void main(String[] args) throws Exception {\n        BufferedReader br = new BufferedReader(new FileReader(args[0]));\n        String jarPath;\n        while ((jarPath = br.readLine()) != null) {\n            try {\n                if (!jarPath.endsWith(\".jar\")) continue;\n                File f = new File(jarPath);\n                if (!f.exists()) continue;\n                ZipFile zf = new ZipFile(f);\n                Enumeration<? extends ZipEntry> entries = zf.entries();\n                while (entries.hasMoreElements()) {\n                    ZipEntry entry = entries.nextElement();\n                    if (entry.getName().endsWith(\".class\") && !entry.getName().startsWith(\"META-INF\")) {\n                        InputStream is = zf.getInputStream(entry);\n                        DataInputStream dis = new DataInputStream(is);\n                        int magic = dis.readInt();\n                        if (magic == 0xCAFEBABE) {\n                            int minor = dis.readUnsignedShort();\n                            int major = dis.readUnsignedShort();\n                            int javaVer = major - 44;\n                            Date d = new Date(entry.getTime());\n                            SimpleDateFormat sdf = new SimpleDateFormat(\"yyyy-MM-dd\");\n                            System.out.println(jarPath + \"|\" + javaVer + \"|\" + sdf.format(d));\n                            break;\n                        }\n                    }\n                }\n                zf.close();\n            } catch (Exception e) {}\n        }\n    }\n}")
+                (shell/sh "javac .nuke-tmp/ClassInfo.java")
+                (io/write-file ".nuke-tmp/jars.txt" (str/join "\n" used-jars-list))
+                (let [info-res (shell/sh "java -cp .nuke-tmp ClassInfo .nuke-tmp/jars.txt")
+                      info-out (:stdout info-res)
+                      info-lines (str/split info-out "\n")
+                      jar-infos (atom {})
+                      _ (loop [lines info-lines]
+                          (if (not (empty? lines))
+                            (let [line (first lines)
+                                  parts (str/split line "|")]
+                              (if (= (count parts) 3)
+                                (swap! jar-infos assoc (first parts) {:version (nth parts 1) :date (nth parts 2)}))
+                              (recur (rest lines)))))
+                      
+                      ;; JSON Generators
+                      escape-js (fn [s] (str/replace s "\"" "\\\""))
+                      to-js-arr (fn [lst] (str "[" (str/join "," (map (fn [x] (str "\"" (escape-js x) "\"")) lst)) "]"))
+                      
+                      js-unused (to-js-arr unused-jars)
+                      js-used (str "{" (str/join "," 
+                                         (map (fn [j]
+                                                (let [info (get @jar-infos j {:version "?" :date "?"})
+                                                      classes (get @jar-to-classes j [])]
+                                                  (str "\"" (escape-js j) "\": {version: \"" (:version info) "\", date: \"" (:date info) "\", classes: " (to-js-arr classes) "}")))
+                                              used-jars-list))
+                                   "}")
+                      
+                      html-content (str "<!DOCTYPE html><html><head><title>Nuke Dependency Report</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+body { font-family: 'Inter', sans-serif; padding: 40px; background: #0f172a; color: #f8fafc; margin: 0; }
+h1 { color: #38bdf8; font-weight: 600; margin-bottom: 20px; }
+.header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+.container { max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; height: calc(100vh - 120px); }
+.card { background: #1e293b; padding: 25px; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #334155; }
+.tab { padding: 10px 20px; cursor: pointer; color: #94a3b8; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.2s; }
+.tab:hover { color: #cbd5e1; }
+.tab.active { color: #38bdf8; border-bottom-color: #38bdf8; }
+.tab-content { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.tab-content.active { display: flex; }
+.scroll-area { overflow-y: auto; flex: 1; padding-right: 10px; }
+.jar-item { padding: 8px 12px; background: #334155; border-radius: 6px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; margin: 4px 0; font-family: 'Inter', sans-serif; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.jar-item:hover { background: #475569; }
+.badge { background: #0f172a; padding: 2px 8px; border-radius: 99px; font-size: 0.75rem; color: #94a3b8; }
+.badge-version { background: #0c4a6e; color: #7dd3fc; }
+.badge-date { background: #166534; color: #86efac; }
+.unused-item { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; padding: 6px 12px; border-radius: 6px; margin: 4px 0; font-family: 'Inter', sans-serif; display: inline-block; }
+.search-input { width: calc(100% - 34px); padding: 12px 16px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #f8fafc; margin-bottom: 20px; font-family: 'Inter', sans-serif; font-size: 0.95rem; }
+.search-input:focus { outline: none; border-color: #38bdf8; }
+ul.tree { list-style-type: none; padding-left: 20px; font-family: ui-monospace, monospace; font-size: 0.85rem; color: #94a3b8; margin: 0; }
+ul.tree li { margin: 2px 0; position: relative; }
+ul.tree li::before { content: ''; position: absolute; top: 12px; left: -15px; width: 10px; height: 1px; background: #475569; }
+ul.tree li::after { content: ''; position: absolute; top: -8px; left: -15px; width: 1px; height: 20px; background: #475569; }
+ul.tree li:last-child::after { height: 20px; }
+.tree-folder { color: #f8fafc; cursor: pointer; display: inline-block; padding: 2px 4px; border-radius: 4px; margin: 2px 0; }
+.tree-folder:hover { background: #334155; }
+.tree-file { color: #38bdf8; display: inline-block; margin: 2px 0; }
+.tree-jar-link { color: #94a3b8; font-size: 0.75rem; margin-left: 10px; }
+.hidden { display: none !important; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #1e293b; }
+::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
+.checkbox-label { font-size: 0.95rem; font-weight: 500; color: #94a3b8; display: flex; align-items: center; gap: 8px; cursor: pointer; background: #1e293b; padding: 8px 16px; border-radius: 8px; border: 1px solid #334155; }
+</style>
+<script>
+const unusedJars = " js-unused ";
+const usedJars = " js-used ";
+
+function basename(path) {
+    return path.split(/[\\\\/]/).pop();
+}
+
+function normalizeJarPath(path) {
+    if (!path.includes('/')) return 'JDK Modules/' + path;
+    const m2Idx = path.indexOf('.m2/repository/');
+    if (m2Idx > -1) return path.substring(m2Idx + 15);
+    return path.startsWith('/') ? path.substring(1) : path;
+}
+
+function switchTab(tabId) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector('.tab[data-target=' + \"'\" + tabId + \"'\" + ']').classList.add('active');
+    document.getElementById(tabId).classList.add('active');
+}
+
+function renderAll() {
+    renderJars('unused');
+    renderJars('used');
+    renderClassOrigins();
+}
+
+function buildJarTreeHtml(jarsObj, isUsed) {
+    const root = {};
+    for (const [path, data] of Object.entries(jarsObj)) {
+        const norm = normalizeJarPath(path);
+        const parts = norm.split('/');
+        let curr = root;
+        for (let i = 0; i < parts.length; i++) {
+            const p = parts[i];
+            if (i === parts.length - 1) {
+                curr[p] = { isJar: true, path: path, data: data };
+            } else {
+                if (!curr[p]) curr[p] = {};
+                curr = curr[p];
+            }
+        }
+    }
+    
+    function buildHtml(node) {
+        let html = '<ul class=\"tree\">';
+        for (const [k, v] of Object.entries(node).sort((a,b) => {
+            if (!!a[1].isJar === !!b[1].isJar) return a[0].localeCompare(b[0]);
+            return a[1].isJar ? 1 : -1;
+        })) {
+            if (v.isJar) {
+                if (!isUsed) {
+                    html += `<li><span class=\"unused-item\">&#128196; ${k}</span></li>`;
+                } else {
+                    const info = v.data;
+                    const id = 'jar-classes-' + Math.random().toString(36).substr(2, 9);
+                    html += `<li>
+                        <div class=\"jar-item\" onclick=\"event.stopPropagation(); document.getElementById('${id}').classList.toggle('hidden')\">
+                            &#128194; <span style='color:#f8fafc; font-weight:500;'>${k}</span>
+                            <span class=\"badge\" style=\"margin-left:auto;\">${info.classes.length} classes</span>
+                            <span class=\"badge badge-version\">Java ${info.version}</span>
+                            <span class=\"badge badge-date\">&#128197; ${info.date}</span>
+                        </div>
+                        <div id=\"${id}\" class=\"hidden\" style=\"padding: 10px 20px; background: #0f172a; border-radius: 8px; margin-top: 4px; margin-bottom: 4px; border-left: 1px solid #334155;\">
+                            ${renderTree(info.classes)}
+                        </div>
+                    </li>`;
+                }
+            } else {
+                const id = 'tree-' + Math.random().toString(36).substr(2, 9);
+                html += `<li><span class=\"tree-folder\" onclick=\"event.stopPropagation(); document.getElementById('${id}').classList.toggle('hidden')\">&#128193; ${k}</span><div id=\"${id}\">${buildHtml(v)}</div></li>`;
+            }
+        }
+        html += '</ul>';
+        return html;
+    }
+    return buildHtml(root);
+}
+
+function renderJars(type) {
+    const term = document.getElementById(type + '-search').value.toLowerCase();
+    const hideJdk = document.getElementById('hide-jdk').checked;
+    const container = document.getElementById(type + '-container');
+    
+    let count = 0;
+    const filtered = {};
+    
+    if (type === 'unused') {
+        for (const j of unusedJars) {
+            if (hideJdk && !j.includes('/')) continue;
+            if (j.toLowerCase().includes(term)) {
+                filtered[j] = null;
+                count++;
+            }
+        }
+    } else {
+        for (const [path, info] of Object.entries(usedJars)) {
+            if (hideJdk && !path.includes('/')) continue;
+            if (path.toLowerCase().includes(term)) {
+                filtered[path] = info;
+                count++;
+            }
+        }
+    }
+    
+    document.getElementById(type + '-tab').innerText = (type === 'unused' ? 'Unused Jars' : 'Utilized Jars') + ` (${count})`;
+    container.innerHTML = buildJarTreeHtml(filtered, type === 'used');
+}
+
+function renderTree(classesList) {
+    const root = {};
+    for (const c of classesList) {
+        const parts = c.split('/');
+        let curr = root;
+        for (let i = 0; i < parts.length; i++) {
+            const p = parts[i];
+            if (!curr[p]) curr[p] = (i === parts.length - 1) ? null : {};
+            curr = curr[p];
+        }
+    }
+    
+    function buildHtml(node) {
+        let html = '<ul class=\"tree\">';
+        for (const [k, v] of Object.entries(node).sort((a,b) => {
+            if ((a[1] === null) === (b[1] === null)) return a[0].localeCompare(b[0]);
+            return a[1] === null ? 1 : -1;
+        })) {
+            if (v === null) {
+                html += `<li><span class=\"tree-file\">&#128196; ${k}</span></li>`;
+            } else {
+                const id = 'tree-' + Math.random().toString(36).substr(2, 9);
+                html += `<li><span class=\"tree-folder\" onclick=\"event.stopPropagation(); document.getElementById('${id}').classList.toggle('hidden')\">&#128193; ${k}</span><div id=\"${id}\">${buildHtml(v)}</div></li>`;
+            }
+        }
+        html += '</ul>';
+        return html;
+    }
+    return buildHtml(root);
+}
+
+function renderClassOrigins() {
+    const term = document.getElementById('origins-search').value.toLowerCase();
+    const hideJdk = document.getElementById('hide-jdk').checked;
+    const container = document.getElementById('origins-container');
+    
+    const root = {};
+    let totalClasses = 0;
+    
+    for (const [jarPath, info] of Object.entries(usedJars)) {
+        if (hideJdk && !jarPath.includes('/')) continue;
+        for (const c of info.classes) {
+            if (term && !c.toLowerCase().includes(term)) continue;
+            totalClasses++;
+            const parts = c.split('/');
+            let curr = root;
+            for (let i = 0; i < parts.length; i++) {
+                const p = parts[i];
+                if (i === parts.length - 1) {
+                    curr[p] = basename(jarPath);
+                } else {
+                    if (!curr[p]) curr[p] = {};
+                    curr = curr[p];
+                }
+            }
+        }
+    }
+    
+    function buildHtml(node) {
+        let html = '<ul class=\"tree\">';
+        for (const [k, v] of Object.entries(node).sort((a,b) => {
+            if ((typeof a[1] === 'string') === (typeof b[1] === 'string')) return a[0].localeCompare(b[0]);
+            return typeof a[1] === 'string' ? 1 : -1;
+        })) {
+            if (typeof v === 'string') {
+                html += `<li><span class=\"tree-file\">&#128196; ${k}</span> <span class=\"tree-jar-link\">(${v})</span></li>`;
+            } else {
+                const id = 'tree-' + Math.random().toString(36).substr(2, 9);
+                html += `<li><span class=\"tree-folder\" onclick=\"document.getElementById('${id}').classList.toggle('hidden')\">&#128193; ${k}</span><div id=\"${id}\">${buildHtml(v)}</div></li>`;
+            }
+        }
+        html += '</ul>';
+        return html;
+    }
+    
+    document.getElementById('origins-tab').innerText = `Class Origins (${totalClasses})`;
+    container.innerHTML = buildHtml(root);
+}
+
+window.onload = () => {
+    renderAll();
+};
+</script>
+</head><body>
+<div class='container'>
+  <div class='header-bar'>
+    <h1 style='margin:0;'>Compile-Time Dependency Report</h1>
+    <label class='checkbox-label'>
+      <input type='checkbox' id='hide-jdk' onchange='renderAll()'> Hide JDK Modules
+    </label>
+  </div>
+  
+  <div class='card'>
+    <div class='tabs'>
+      <div class='tab active' data-target='tab-used' id='used-tab' onclick=\"switchTab('tab-used')\">Utilized Jars</div>
+      <div class='tab' data-target='tab-unused' id='unused-tab' onclick=\"switchTab('tab-unused')\">Unused Jars</div>
+      <div class='tab' data-target='tab-origins' id='origins-tab' onclick=\"switchTab('tab-origins')\">Class Origins</div>
+    </div>
+    
+    <div class='tab-content active' id='tab-used'>
+      <input type='text' id='used-search' class='search-input' placeholder='Search utilized jars...' onkeyup=\"renderJars('used')\">
+      <div class='scroll-area' id='used-container'></div>
+    </div>
+    
+    <div class='tab-content' id='tab-unused'>
+      <input type='text' id='unused-search' class='search-input' placeholder='Search unused jars...' onkeyup=\"renderJars('unused')\">
+      <div class='scroll-area' id='unused-container'></div>
+    </div>
+    
+    <div class='tab-content' id='tab-origins'>
+      <input type='text' id='origins-search' class='search-input' placeholder='Search for a Class...' onkeyup=\"renderClassOrigins()\">
+      <div class='scroll-area' id='origins-container'></div>
+    </div>
+  </div>
+  
+</div></body></html>")]
+                  (io/write-file "target/deps-report.html" html-content)
+                  (log/success "Report saved to target/deps-report.html"))))))))))
+
 (defn exec-test [config]
   (let [test-dir (or (:test-dir config) (if (io/exists? "src/test/java") "src/test/java" "src/tests"))]
     (if (io/exists? test-dir)
@@ -874,6 +1247,7 @@
 (register-task "classpath" [] "Print the project classpath" exec-classpath)
 (register-task "jaxb" ["download-deps"] "Generate Java classes from XSD schemas" exec-jaxb)
 (register-task "compile" ["template" "download-deps" "jaxb"] "Compile Java source files" exec-compile)
+(register-task "analyze-deps" ["template" "download-deps" "jaxb"] "Track class origins and identify unused compile-time dependencies" exec-analyze-deps)
 (register-task "test" ["compile"] "Run JUnit tests" exec-test)
 (register-task "run" ["compile"] "Run the Java application" exec-run)
 (register-task "jar" ["compile"] "Create a standard thin jar" exec-jar)

@@ -205,6 +205,19 @@ nuke test --select-class com.example.MainTest
 nuke test --parallel 4
 ```
 
+### Dependency Analysis
+
+Nuke can trace the exact origins of your classes and identify completely unused jars by leveraging `javac -verbose` at compile time.
+
+```bash
+# Generate a browsable HTML dashboard at target/deps-report.html (default)
+nuke analyze-deps
+
+# Output a quick summary to the CLI instead
+nuke analyze-deps --report cli
+```
+The HTML dashboard gives you a powerful two-way view: it lists all your unused dependencies (which can be safely removed from `nuke.edn` to speed up builds and reduce bundle size), and it lets you browse exactly which classes were loaded from which jars.
+
 ### Authentication
 
 - **SSH** (`git@` or `ssh://`): Uses your standard SSH agent and key configuration. No extra setup needed.
