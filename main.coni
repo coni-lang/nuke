@@ -772,6 +772,7 @@ function renderAll() {
     renderJars('unused');
     renderJars('used');
     renderClassOrigins();
+    renderRepos();
 }
 
 function buildJarTreeHtml(jarsObj, isUsed) {
@@ -957,6 +958,55 @@ function renderClassOrigins() {
     container.innerHTML = buildHtml(root);
 }
 
+function renderRepos() {
+    const term = document.getElementById('repos-search').value.toLowerCase();
+    const hideJdk = document.getElementById('hide-jdk').checked;
+    const container = document.getElementById('repos-container');
+    
+    const reposMap = {};
+    const addJar = (jar, info) => {
+        if (hideJdk && !jar.includes('/')) return;
+        const o = info.origin || 'Local';
+        if (term && !jar.toLowerCase().includes(term) && !o.toLowerCase().includes(term)) return;
+        
+        let displayUrl = o;
+        if (o !== 'Local/Unknown' && o !== 'Unknown' && o !== 'Local') {
+            try { displayUrl = new URL(o).hostname; } catch(e) {}
+        } else {
+            displayUrl = 'Local Jars';
+        }
+        
+        if (!reposMap[displayUrl]) reposMap[displayUrl] = [];
+        reposMap[displayUrl].push(jar);
+    };
+    
+    for (const [jar, info] of Object.entries(usedJars)) addJar(jar, info);
+    for (const [jar, info] of Object.entries(unusedJars)) addJar(jar, info);
+    
+    let html = '<ul class=\"tree\">';
+    for (const repo of Object.keys(reposMap).sort()) {
+        const jars = reposMap[repo].sort();
+        const id = 'repo-' + Math.random().toString(36).substr(2, 9);
+        html += `<li>
+            <span class=\"tree-folder\" onclick=\"document.getElementById('${id}').classList.toggle('hidden')\">
+               &#127760; ${repo} <span class=\"badge\" style=\"margin-left:8px;\">${jars.length} jars</span>
+            </span>
+            <div id=\"${id}\" class=\"hidden\" style=\"padding-left:10px;\">
+                <ul class=\"tree\">`;
+        for (const j of jars) {
+            const norm = normalizeJarPath(j);
+            html += `<li><span class=\"tree-file\">&#128196; ${norm}</span></li>`;
+        }
+        html += `       </ul>
+            </div>
+        </li>`;
+    }
+    html += '</ul>';
+    
+    document.getElementById('repos-tab').innerText = `Repositories (${Object.keys(reposMap).length})`;
+    container.innerHTML = html;
+}
+
 window.onload = () => {
     renderAll();
 };
@@ -975,6 +1025,7 @@ window.onload = () => {
       <div class='tab active' data-target='tab-used' id='used-tab' onclick=\"switchTab('tab-used')\">Utilized Jars</div>
       <div class='tab' data-target='tab-unused' id='unused-tab' onclick=\"switchTab('tab-unused')\">Unused Jars</div>
       <div class='tab' data-target='tab-origins' id='origins-tab' onclick=\"switchTab('tab-origins')\">Class Origins</div>
+      <div class='tab' data-target='tab-repos' id='repos-tab' onclick=\"switchTab('tab-repos')\">Repositories</div>
     </div>
     
     <div class='tab-content active' id='tab-used'>
@@ -990,6 +1041,11 @@ window.onload = () => {
     <div class='tab-content' id='tab-origins'>
       <input type='text' id='origins-search' class='search-input' placeholder='Search for a Class...' onkeyup=\"renderClassOrigins()\">
       <div class='scroll-area' id='origins-container'></div>
+    </div>
+
+    <div class='tab-content' id='tab-repos'>
+      <input type='text' id='repos-search' class='search-input' placeholder='Search repositories or jars...' onkeyup=\"renderRepos()\">
+      <div class='scroll-area' id='repos-container'></div>
     </div>
   </div>
   
