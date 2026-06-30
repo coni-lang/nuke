@@ -278,6 +278,7 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 ## Version History
 
 ### v1.2.0 (Latest)
+- **Dependency Analysis**: `nuke analyze-deps` now generates an interactive HTML report featuring tabbed navigation (Utilized, Unused, and Class Origins), a tree-based hierarchical view of Maven groups, and automatic detection of Java compiler versions and build dates from JARs. Completely unused JAR groups are visually highlighted in red.
 - **Multiple Deploy Targets**: `:deploy` can now be a map of named repositories. Specify the target using `nuke upload <target-name>` or `nuke upload-uberjar <target-name>`. If target is omitted, Nuke will fail-fast and list available options. The IntelliJ plugin adds a gutter menu option for each deployment target.
 - **Git-Based Dependencies**: Pull dependencies directly from git repositories instead of Nexus. Supports tags (cached permanently) and branches (re-fetched and rebuilt on new commits).
 - **Git Registries**: Define `:git-registries` to avoid repeating base URLs for team/org repos.
