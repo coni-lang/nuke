@@ -886,21 +886,36 @@
 (register-task "dependencies" [] "Show recursively dependencies (local, maven, git)" exec-dependencies)
 
 (defn run-task-graph [task-name config completed]
-  (if (not (= (get completed task-name :not-found) :not-found))
-    completed
-    (let [task (get @global-tasks task-name)]
-      (if (nil? task)
-        (do
-          (println (str "Unknown task: " task-name))
-          (sys-exit 1))
-        (let [deps (:deps task)
-              completed-after-deps (loop [rem deps acc completed]
-                                     (if (empty? rem)
-                                       acc
-                                       (recur (rest rem) (run-task-graph (first rem) config acc))))
-              exec-fn (:exec-fn task)]
-          (exec-fn config)
-          (assoc completed-after-deps task-name true))))))
+  (let [args (sys-os-args)
+        skip-task? (loop [rem args]
+                     (if (empty? rem) false
+                       (if (= (first rem) "--skip")
+                         (if (> (count rem) 1)
+                           (if (= (get rem 1) task-name) true (recur (rest (rest rem))))
+                           (recur (rest rem)))
+                         (if (or (= (first rem) (str "--skip-" task-name))
+                                 (= (first rem) (str "--skip-" task-name "s")))
+                           true
+                           (recur (rest rem))))))]
+    (if skip-task?
+      (do
+        (log/success (str "Skipping task: " task-name " (--skip provided)"))
+        (assoc completed task-name true))
+      (if (not (= (get completed task-name :not-found) :not-found))
+        completed
+        (let [task (get @global-tasks task-name)]
+          (if (nil? task)
+            (do
+              (println (str "Unknown task: " task-name))
+              (sys-exit 1))
+            (let [deps (:deps task)
+                  completed-after-deps (loop [rem deps acc completed]
+                                         (if (empty? rem)
+                                           acc
+                                            (recur (rest rem) (run-task-graph (first rem) config acc))))
+                  exec-fn (:exec-fn task)]
+              (exec-fn config)
+              (assoc completed-after-deps task-name true))))))))
 
 (defn show-tasks []
   (println "Available Tasks:")
