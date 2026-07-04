@@ -34,3 +34,4 @@ nuke-intellij-plugin/src/main/resources/bin/
 .nuke-tmp/
 coni-compiler
 coni
+test-mirror/

@@ -283,6 +283,23 @@ By default, Nuke expects a standard directory layout:
 └── target/            # Generated jars and zips
 ```
 
+## Airgap & Offline Environments
+
+Nuke natively supports running entirely offline or in airgapped networks without a central Maven repository.
+
+### Configuring a Local Mirror
+Set the `NUKE_MIRROR` environment variable to a local directory or URL to override all repository lookups:
+```sh
+export NUKE_MIRROR=file:///usb/nuke-repo
+nuke build
+```
+
+### Mirror Management Tasks
+Nuke includes built-in commands to easily manage dependencies across environments. If you provide a `.zip` path, Nuke will automatically compress/extract the mirror on the fly!
+
+- **`nuke mirror-export <path>`**: Resolves all your project dependencies, as well as Nuke's intrinsic background tools (like Jacoco, JUnit, ErrorProne), and exports them into the target folder or zip.
+- **`nuke mirror-import <path>`**: Copies a mirrored directory or zip directly into your local `~/.m2/repository` for offline compilation.
+- **`nuke mirror-upload <path>`**: Scans the given mirror directory/zip and automatically uploads every artifact to your configured `:deploy-repository` in Nexus.
 ## IDE Integration
 
 Nuke provides a dedicated IntelliJ IDEA plugin. You can install it from the `nuke-intellij-plugin` directory.

@@ -12,6 +12,9 @@
   {:name "Test Packaged Nuke"
    :shell {:cmd "../../nuke uberjar"
            :cwd "dist/nuke/examples/example-java-app"}}
+  {:name "Create Airgap Mirror"
+   :shell {:cmd "./nuke mirror-export dist/nuke/nuke-mirror"
+           :cwd "."}}
   {:name "Zip Dist"
    :shell {:cmd "cd dist && zip -r nuke-dist-$(date +%Y-%m-%d_%H-%M).zip nuke"
            :cwd "."}}]}
