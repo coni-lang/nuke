@@ -565,49 +565,6 @@
   (build-jar config "Creating uberjar..." "uberjar" "uber-classes" "-uberjar.jar" true))
 
 
-(defn generate-pom [config]
-  (let [name (or (:name config) "app")
-        version (get-app-version config)
-        group-id (or (:group-id config) "com.example")
-        deps (:dependencies config)
-        deps-xml (if deps
-                   (loop [rem deps acc ""]
-                     (if (empty? rem) acc
-                       (let [dep-str (first rem)
-                             parts (str/split dep-str ":")
-                             g (get parts 0)
-                             a (get parts 1)
-                             v (get parts 2)
-                             dep-xml (str "    <dependency>\n      <groupId>" g "</groupId>\n      <artifactId>" a "</artifactId>\n      <version>" v "</version>\n    </dependency>\n")]
-                         (recur (rest rem) (str acc dep-xml)))))
-                   "")]
-    (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-         "<project xmlns=\"http://maven.apache.org/POM/4.0.0\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd\">\n"
-         "  <modelVersion>4.0.0</modelVersion>\n"
-         "  <groupId>" group-id "</groupId>\n"
-         "  <artifactId>" name "</artifactId>\n"
-         "  <version>" version "</version>\n"
-         "  <dependencies>\n"
-         deps-xml
-         "  </dependencies>\n"
-         "</project>\n")))
-
-(defn parse-g-a-v-from-m2 [path]
-  (let [idx (str/index-of (str/replace path "\\" "/") ".m2/repository/")]
-    (if (>= idx 0)
-      (let [rel-path (subs (str/replace path "\\" "/") (+ idx 15) (count path))
-            parts (str/split rel-path "/")
-            len (count parts)]
-        (if (>= len 4)
-          (let [filename (get parts (- len 1))
-                v (get parts (- len 2))
-                a (get parts (- len 3))
-                g-parts (subvec parts 0 (- len 3))
-                g (str/join "." g-parts)]
-            {:g g :a a :v v :filename filename})
-          nil))
-      nil)))
-
 (defn get-origin [jar-path repos]
   (let [origin-path (str jar-path ".origin")]
     (if (io/exists? origin-path)
@@ -619,8 +576,8 @@
                             (if (empty? rem)
                               "Unknown"
                               (let [url (first rem)
-                                    res (shell/sh (str "curl -sI -o /dev/null -w \"%{http_code}\" \"" url "\""))]
-                                (if (= (str/trim (:stdout res)) "200")
+                                    res (try (sys-http-head url) (catch e "500"))]
+                                (if (= res "200")
                                   url
                                   (recur (rest rem))))))]
             (if (not= found-url "Unknown")
@@ -1281,12 +1238,12 @@ window.onload = () => {
           deploy-url (:url deploy-info)
           deploy-name (:name deploy-info)]
       (log/step (str "Uploading to Nexus" (if deploy-name (str " (" deploy-name ")") "") "..."))
-      (let [pom-content (generate-pom config)]
+      (let [app-version (get-app-version config)
+            app-name (or (:name config) "app")
+            group-id (or (:group-id config) "com.example")
+            pom-content (maven/generate-pom group-id app-name app-version (:dependencies config))]
         (io/write-file "target/pom.xml" pom-content)
-        (let [app-version (get-app-version config)
-              app-name (or (:name config) "app")
-              group-id (or (:group-id config) "com.example")
-              tname (:task-name config)
+        (let [tname (:task-name config)
               suffix (if (and tname
                              (not (= tname "upload"))
                              (not (= tname "upload-uberjar")))
@@ -1388,15 +1345,12 @@ window.onload = () => {
   (let [m2-base (str (sys-env-get "HOME") "/.m2/repository/")
         rel-path (str/replace m2-file m2-base "")]
     (if (str/starts-with? m2-file m2-base)
-      (let [dir-path (shell/sh (str "dirname " (io/quote-path rel-path)))
-            dir-name (str/trim (:stdout dir-path))
-            target-dir (str target-mirror-dir "/" dir-name)]
-        (shell/sh (str "mkdir -p " (io/quote-path target-dir)))
-        (shell/sh (str "cp -R " (io/quote-path (str m2-base dir-name)) "/* " (io/quote-path target-dir) "/ 2>/dev/null || true")))
+      (let [dir-name (io/parent-dir rel-path)
+            target-dir (str target-mirror-dir "/" dir-name)
+            src-dir (str m2-base dir-name)]
+        (io/mkdir-p target-dir)
+        (io/copy-dir-contents src-dir target-dir))
       nil)))
-
-(defn to-absolute [p]
-  (if (str/starts-with? p "/") p (str (str/trim (:stdout (shell/sh "pwd"))) "/" p)))
 
 (defn exec-mirror-export [config]
   (let [args (sys-os-args)
@@ -1412,7 +1366,7 @@ window.onload = () => {
       (do
         (log/step (str "Exporting mirror to " target-path))
         (let [is-zip (str/ends-with? target-path ".zip")
-              actual-target (if is-zip (str ".nuke-tmp/mirror-export-" (str/trim (:stdout (shell/sh "date +%s")))) target-path)]
+              actual-target (if is-zip (str ".nuke-tmp/mirror-export-" (sys-time-now)) target-path)]
           (let [repos (get-active-repos config)
               main-deps (let [raw (or (:dependencies config) [])] (jars/resolve-scoped-deps raw "all"))
               test-deps (if (:test-dependencies config) (:test-dependencies config) [])
@@ -1452,9 +1406,11 @@ window.onload = () => {
           (if is-zip
             (do
               (log/step "Zipping mirror...")
-              (shell/sh (str "cd " (io/quote-path actual-target) " && zip -rq mirror.zip ."))
-              (shell/sh (str "cp " (io/quote-path (str actual-target "/mirror.zip")) " " (io/quote-path (to-absolute target-path))))
-              (shell/sh (str "rm -rf " (io/quote-path actual-target)))))
+              (let [abs-target (io/to-absolute target-path)
+                    files (io/read-dir actual-target)
+                    full-paths (loop [rem files acc []] (if (empty? rem) acc (recur (rest rem) (conj acc (str actual-target "/" (first rem))))))]
+                (io/zip abs-target full-paths))
+              (io/delete-file actual-target)))
           (log/success "Mirror export complete.")))))))
 
 (defn exec-mirror-import [config]
@@ -1472,34 +1428,16 @@ window.onload = () => {
         (log/step (str "Importing mirror from " src-path))
         (let [is-zip (str/ends-with? src-path ".zip")
               actual-src (if is-zip 
-                           (let [tmp (str ".nuke-tmp/mirror-import-" (str/trim (:stdout (shell/sh "date +%s"))))]
-                             (shell/sh (str "mkdir -p " tmp))
-                             (shell/sh (str "unzip -q " (io/quote-path src-path) " -d " tmp))
+                           (let [tmp (str ".nuke-tmp/mirror-import-" (sys-time-now))]
+                             (io/mkdir-p tmp)
+                             (io/unzip (io/to-absolute src-path) tmp)
                              tmp)
                            src-path)
               m2-base (str (sys-env-get "HOME") "/.m2/repository")]
-          (shell/sh (str "mkdir -p " (io/quote-path m2-base)))
-          (let [res (shell/sh (str "cp -R " (io/quote-path actual-src) "/* " (io/quote-path m2-base) "/"))]
-            (if is-zip (shell/sh (str "rm -rf " (io/quote-path actual-src))))
-            (if (= 0 (:code res))
-              (log/success "Mirror import complete.")
-              (log/error (str "Failed to import mirror: " (:stderr res))))))))))
-
-(defn parse-gav-from-path [base-path file-path]
-  (let [rel (if (str/starts-with? file-path (str base-path "/")) 
-                (str/substring file-path (+ 1 (count base-path)) (count file-path))
-                file-path)
-        parts (str/split rel "/")]
-    (if (< (count parts) 4)
-      nil
-      (let [len (count parts)
-            v (get parts (- len 2))
-            a (get parts (- len 3))
-            g-parts (loop [rem parts i 0 acc []]
-                      (if (= i (- len 3)) acc
-                        (recur (rest rem) (+ i 1) (conj acc (first rem)))))
-            g (str/join "." g-parts)]
-        {:g g :a a :v v}))))
+          (io/mkdir-p m2-base)
+          (io/copy-dir-contents actual-src m2-base)
+          (if is-zip (io/delete-file actual-src))
+          (log/success "Mirror import complete."))))))
 
 (defn exec-mirror-upload [config]
   (let [args (sys-os-args)
@@ -1522,35 +1460,7 @@ window.onload = () => {
       (do (log/error "mirror-upload requires a source path") (sys-exit 1))
       (if (nil? deploy-repo)
         (do (log/error "No :deploy-repository defined in project config") (sys-exit 1))
-        (do
-          (log/step (str "Uploading mirror from " src-path " to " deploy-repo))
-          (if (or (nil? user) (nil? pass))
-            (log/error "No deploy credentials found in ENV or settings.xml")
-            (let [is-zip (str/ends-with? src-path ".zip")
-                  actual-src (if is-zip 
-                               (let [tmp (str ".nuke-tmp/mirror-upload-" (str/trim (:stdout (shell/sh "date +%s"))))]
-                                 (shell/sh (str "mkdir -p " tmp))
-                                 (shell/sh (str "unzip -q " (io/quote-path src-path) " -d " tmp))
-                                 tmp)
-                               src-path)
-                  res (shell/sh (str "find " (io/quote-path actual-src) " -name \"*.pom\""))
-                  poms (if (= 0 (:code res)) (str/split (str/trim (:stdout res)) "\n") [])]
-              (loop [rem poms]
-                (if (not (empty? rem))
-                  (let [pom (first rem)
-                        jar (str/replace pom ".pom" ".jar")
-                        gav (parse-gav-from-path actual-src pom)]
-                    (if gav
-                      (let [group-id (:g gav)
-                            app-name (:a gav)
-                            app-version (:v gav)]
-                        (if (io/exists? jar)
-                          (do
-                            (println (str "Uploading " group-id ":" app-name ":" app-version))
-                            (maven/upload-nexus-artifact user pass deploy-repo group-id app-name app-version jar pom)))))
-                    (recur (rest rem)))))
-              (if is-zip (shell/sh (str "rm -rf " (io/quote-path actual-src))))
-              (log/success "Mirror upload complete."))))))))
+        (maven/upload-mirror-dir src-path deploy-repo user pass))))))
 
 (def global-tasks (atom {}))
 (def global-task-list (atom []))
