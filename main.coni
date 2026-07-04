@@ -508,6 +508,33 @@
       (if (io/exists? res-dir)
         (io/copy-dir-contents res-dir classes-dir)
         nil))
+    (let [includes (:includes config)
+          excludes (:excludes config)]
+      (if (or includes excludes)
+        (let [all-files (io/file-seq classes-dir)
+              prefix (str classes-dir "/")]
+          (loop [rem-files all-files]
+            (if (not (empty? rem-files))
+              (let [f (first rem-files)]
+                (if (io/file? f)
+                  (let [rel-f (if (str/starts-with? f prefix) 
+                                (str/substring f (count prefix) (count f)) 
+                                f)
+                        should-include (if (not includes) true
+                                         (loop [p includes]
+                                           (if (empty? p) false
+                                             (if (io/path-matches-glob? rel-f (first p)) true
+                                               (recur (rest p))))))
+                        should-exclude (if (not excludes) false
+                                         (loop [p excludes]
+                                           (if (empty? p) false
+                                             (if (io/path-matches-glob? rel-f (first p)) true
+                                               (recur (rest p))))))]
+                    (if (or (not should-include) should-exclude)
+                      (do
+                        (log/info (str "Filtering out " rel-f " from jar..."))
+                        (io/delete-file f)))))
+                (recur (rest rem-files))))))))
     (let [app-version (get-app-version config)
           app-name (or (:name config) "app")
           tname (:task-name config)

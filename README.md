@@ -266,6 +266,41 @@ You can define custom tasks under the `:tasks` key in your `nuke.edn`.
 - `:deps`: A list of task dependencies that must run before this task.
 - `:desc`: A short description shown in `nuke tasks`.
 
+### Filtering Jars and Custom Dependencies
+
+Nuke allows you to generate multiple specialized jars or uberjars from a single project by combining `:extends` with `:dependencies`, `:includes`, and `:excludes`.
+
+When you extend a task, you can completely override the global project `:dependencies` array. Nuke will dynamically resolve only the subset you specify for that specific task. Additionally, you can filter out specific `.class` or `.properties` files natively using glob patterns.
+
+```edn
+:tasks
+[;; 1. Simple Jar: Just the API interfaces, no dependencies
+ {:name "jar-api"
+  :extends "jar"
+  :jar-name "target/my-api.jar"
+  :excludes ["com/example/internal/**/*.class"]}
+
+ ;; 2. Custom Uberjar: Only 2 dependencies, heavily filtered
+ {:name "uberjar-backend"
+  :extends "uberjar"
+  :jar-name "target/backend.jar"
+  ;; COMPLETELY overwrites global project dependencies!
+  :dependencies ["com.google.code.gson:gson:2.10.1" 
+                 "org.slf4j:slf4j-simple:1.7.32"]
+  ;; Strip out unwanted properties from dependencies or local classes
+  :excludes ["application-dev.properties" "logback.xml"]
+  ;; Strictly include only matching patterns (if omitted, everything not excluded is included)
+  :includes ["com/example/backend/**" "application-prod.properties"]}
+  
+ ;; 3. Custom Upload: Uploads the filtered backend uberjar
+ {:name "upload-backend"
+  :extends "upload-uberjar"
+  :jar-name "target/backend.jar"
+  ;; Must match the dependencies of the uberjar so the dynamically generated POM is correct!
+  :dependencies ["com.google.code.gson:gson:2.10.1" 
+                 "org.slf4j:slf4j-simple:1.7.32"]}]
+```
+
 ## Directory Structure
 
 By default, Nuke expects a standard directory layout:
