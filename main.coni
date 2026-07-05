@@ -1460,7 +1460,7 @@ window.onload = () => {
       (do (log/error "mirror-upload requires a source path") (sys-exit 1))
       (if (nil? deploy-repo)
         (do (log/error "No :deploy-repository defined in project config") (sys-exit 1))
-        (maven/upload-mirror-dir src-path deploy-repo user pass))))))
+        (maven/upload-mirror-dir src-path deploy-repo user pass)))))
 
 (def global-tasks (atom {}))
 (def global-task-list (atom []))
@@ -1913,7 +1913,13 @@ window.onload = () => {
         (= cmd "tasks") (show-tasks)
         (= cmd "info")  (show-info config)
         (= cmd "watch") (nuke-watch (if (> (count args) 2) (get args 2) "compile") config)
-        :else (run-task-graph cmd config {})))))
+        :else (do
+                (if (= cmd "run")
+                  (if (not (:main-class config))
+                    (do
+                      (log/error "Error: No :main-class defined in configuration.")
+                      (sys-exit 1))))
+                (run-task-graph cmd config {}))))))
 
 (run)
 (sys-exit 0)

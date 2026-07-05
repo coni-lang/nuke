@@ -24,9 +24,13 @@ else
 fi
 
 if [ "$BUILD_ALL" = "1" ]; then
-    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $COMPILER build .build/main.coni -o nuke-mac
-    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $COMPILER build .build/main.coni -o nuke-linux
-    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $COMPILER build .build/main.coni -o nuke.exe
+    mkdir -p .build/mac .build/linux .build/windows
+    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $COMPILER compile-native .build/main.coni -o .build/mac
+    mv .build/mac/main nuke-mac
+    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/linux
+    mv .build/linux/main nuke-linux
+    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/windows
+    mv .build/windows/main.exe nuke.exe 2>/dev/null || mv .build/windows/main nuke.exe
     if [ "$(uname)" = "Linux" ]; then
         cp nuke-linux nuke
     elif [ "$(uname)" = "Darwin" ]; then
@@ -35,7 +39,9 @@ if [ "$BUILD_ALL" = "1" ]; then
         cp nuke.exe nuke
     fi
 else
-    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 $COMPILER build .build/main.coni -o nuke
+    mkdir -p .build/dev
+    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 $COMPILER compile-native .build/main.coni -o .build/dev
+    mv .build/dev/main nuke
 fi
 
 echo "Running smoke test to verify syntax and parsing..."
