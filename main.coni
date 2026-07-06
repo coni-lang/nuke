@@ -1352,103 +1352,79 @@ window.onload = () => {
         (io/copy-dir-contents src-dir target-dir))
       nil)))
 
-(defn exec-mirror-export [config]
-  (let [args (sys-os-args)
-        idx (loop [rem args i 0]
-              (if (empty? rem) -1
-                (if (= (first rem) "mirror-export") i
-                  (recur (rest rem) (+ i 1)))))
-        target-path (if (and (not (= idx -1)) (> (count args) (+ idx 1)))
-                      (get args (+ idx 1))
-                      nil)]
-    (if (nil? target-path)
-      (do (log/error "mirror-export requires a target path") (sys-exit 1))
-      (do
-        (log/step (str "Exporting mirror to " target-path))
-        (let [is-zip (str/ends-with? target-path ".zip")
-              actual-target (if is-zip (str ".nuke-tmp/mirror-export-" (sys-time-now)) target-path)]
-          (let [repos (get-active-repos config)
-              main-deps (let [raw (or (:dependencies config) [])] (jars/resolve-scoped-deps raw "all"))
-              test-deps (if (:test-dependencies config) (:test-dependencies config) [])
-              deps (concat main-deps test-deps)
-              
-              jaxb-v (or (:version (:jaxb config)) "4.0.5")
-              pmd-v (or (:version (:pmd config)) "7.0.0")
-              cs-v (or (:version (:checkstyle config)) "10.15.0")
-              ep-v (or (:version (:errorprone config)) "2.27.1")
-              jacoco-v (or (:version (:jacoco config)) "0.8.11")
-              junit-v "1.10.1"
-              
-              intrinsic-deps [(str "org.glassfish.jaxb:jaxb-xjc:" jaxb-v)
-                              (str "org.glassfish.jaxb:jaxb-core:" jaxb-v)
-                              (str "org.glassfish.jaxb:jaxb-runtime:" jaxb-v)
-                              "jakarta.xml.bind:jakarta.xml.bind-api:4.0.2"
-                              "jakarta.activation:jakarta.activation-api:2.1.3"
-                              (str "net.sourceforge.pmd:pmd-java:" pmd-v)
-                              (str "net.sourceforge.pmd:pmd-core:" pmd-v)
-                              (str "com.puppycrawl.tools:checkstyle:" cs-v)
-                              (str "org.jacoco:org.jacoco.agent:" jacoco-v)
-                              (str "org.jacoco:org.jacoco.cli:" jacoco-v)
-                              (str "org.junit.platform:junit-platform-console-standalone:" junit-v)
-                              (str "com.google.errorprone:error_prone_core:" ep-v)]
-              all-deps (concat deps intrinsic-deps)]
-          (let [resolved (maven/resolve-deps all-deps repos)]
-            (loop [rem resolved]
-              (if (not (empty? rem))
-                (do (copy-m2-artifact (first rem) actual-target)
-                    (recur (rest rem))))))
-          (let [ep-jar (maven/coord-to-m2-path "com.google.errorprone" "error_prone_core" ep-v "with-dependencies.jar")
-                jc-jar (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")]
-            (java/download-jar repos "com.google.errorprone" "error_prone_core" ep-v "with-dependencies.jar" ep-jar)
-            (java/download-jar repos "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar" jc-jar)
-            (copy-m2-artifact ep-jar actual-target)
-            (copy-m2-artifact jc-jar actual-target))
-          (if is-zip
-            (do
-              (log/step "Zipping mirror...")
-              (let [abs-target (io/to-absolute target-path)
-                    files (io/read-dir actual-target)
-                    full-paths (loop [rem files acc []] (if (empty? rem) acc (recur (rest rem) (conj acc (str actual-target "/" (first rem))))))]
-                (io/zip abs-target full-paths))
-              (io/delete-file actual-target)))
-          (log/success "Mirror export complete.")))))))
+(defn exec-mirror-export [config target-path]
+  (if (nil? target-path)
+    (do (log/error "mirror export requires a target path") (sys-exit 1))
+    (do
+      (log/step (str "Exporting mirror to " target-path))
+      (let [is-zip (str/ends-with? target-path ".zip")
+            actual-target (if is-zip (str ".nuke-tmp/mirror-export-" (sys-time-now)) target-path)]
+        (let [repos (get-active-repos config)
+            main-deps (let [raw (or (:dependencies config) [])] (jars/resolve-scoped-deps raw "all"))
+            test-deps (if (:test-dependencies config) (:test-dependencies config) [])
+            deps (concat main-deps test-deps)
+            
+            jaxb-v (or (:version (:jaxb config)) "4.0.5")
+            pmd-v (or (:version (:pmd config)) "7.0.0")
+            cs-v (or (:version (:checkstyle config)) "10.15.0")
+            ep-v (or (:version (:errorprone config)) "2.27.1")
+            jacoco-v (or (:version (:jacoco config)) "0.8.11")
+            junit-v "1.10.1"
+            
+            intrinsic-deps [(str "org.glassfish.jaxb:jaxb-xjc:" jaxb-v)
+                            (str "org.glassfish.jaxb:jaxb-core:" jaxb-v)
+                            (str "org.glassfish.jaxb:jaxb-runtime:" jaxb-v)
+                            "jakarta.xml.bind:jakarta.xml.bind-api:4.0.2"
+                            "jakarta.activation:jakarta.activation-api:2.1.3"
+                            (str "net.sourceforge.pmd:pmd-java:" pmd-v)
+                            (str "net.sourceforge.pmd:pmd-core:" pmd-v)
+                            (str "com.puppycrawl.tools:checkstyle:" cs-v)
+                            (str "org.jacoco:org.jacoco.agent:" jacoco-v)
+                            (str "org.jacoco:org.jacoco.cli:" jacoco-v)
+                            (str "org.junit.platform:junit-platform-console-standalone:" junit-v)
+                            (str "com.google.errorprone:error_prone_core:" ep-v)]
+            all-deps (concat deps intrinsic-deps)]
+        (let [resolved (maven/resolve-deps all-deps repos)]
+          (loop [rem resolved]
+            (if (not (empty? rem))
+              (do (copy-m2-artifact (first rem) actual-target)
+                  (recur (rest rem))))))
+        (let [ep-jar (maven/coord-to-m2-path "com.google.errorprone" "error_prone_core" ep-v "with-dependencies.jar")
+              jc-jar (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")]
+          (java/download-jar repos "com.google.errorprone" "error_prone_core" ep-v "with-dependencies.jar" ep-jar)
+          (java/download-jar repos "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar" jc-jar)
+          (copy-m2-artifact ep-jar actual-target)
+          (copy-m2-artifact jc-jar actual-target))
+        (if is-zip
+          (do
+            (log/step "Zipping mirror...")
+            (let [abs-target (io/to-absolute target-path)
+                  files (io/read-dir actual-target)
+                  full-paths (loop [rem files acc []] (if (empty? rem) acc (recur (rest rem) (conj acc (str actual-target "/" (first rem))))))]
+              (io/zip abs-target full-paths))
+            (io/delete-file actual-target)))
+        (log/success "Mirror export complete."))))))
 
-(defn exec-mirror-import [config]
-  (let [args (sys-os-args)
-        idx (loop [rem args i 0]
-              (if (empty? rem) -1
-                (if (= (first rem) "mirror-import") i
-                  (recur (rest rem) (+ i 1)))))
-        src-path (if (and (not (= idx -1)) (> (count args) (+ idx 1)))
-                      (get args (+ idx 1))
-                      nil)]
-    (if (nil? src-path)
-      (do (log/error "mirror-import requires a source path") (sys-exit 1))
-      (do
-        (log/step (str "Importing mirror from " src-path))
-        (let [is-zip (str/ends-with? src-path ".zip")
-              actual-src (if is-zip 
-                           (let [tmp (str ".nuke-tmp/mirror-import-" (sys-time-now))]
-                             (io/mkdir-p tmp)
-                             (io/unzip (io/to-absolute src-path) tmp)
-                             tmp)
-                           src-path)
-              m2-base (str (sys-env-get "HOME") "/.m2/repository")]
-          (io/mkdir-p m2-base)
-          (io/copy-dir-contents actual-src m2-base)
-          (if is-zip (io/delete-file actual-src))
-          (log/success "Mirror import complete."))))))
+(defn exec-mirror-import [config src-path]
+  (if (nil? src-path)
+    (do (log/error "mirror import requires a source path") (sys-exit 1))
+    (do
+      (log/step (str "Importing mirror from " src-path))
+      (let [is-zip (str/ends-with? src-path ".zip")
+            actual-src (if is-zip 
+                         (let [tmp (str ".nuke-tmp/mirror-import-" (sys-time-now))]
+                           (io/mkdir-p tmp)
+                           (io/unzip (io/to-absolute src-path) tmp)
+                           tmp)
+                         src-path)
+            m2-base (str (sys-env-get "HOME") "/.m2/repository")]
+        (io/mkdir-p m2-base)
+        (io/copy-dir-contents actual-src m2-base)
+        (if is-zip (io/delete-file actual-src))
+        (log/success "Mirror import complete.")))))
 
-(defn exec-mirror-upload [config]
-  (let [args (sys-os-args)
-        idx (loop [rem args i 0]
-              (if (empty? rem) -1
-                (if (= (first rem) "mirror-upload") i
-                  (recur (rest rem) (+ i 1)))))
-        src-path (if (and (not (= idx -1)) (> (count args) (+ idx 1)))
-                      (get args (+ idx 1))
-                      nil)
-        deploy-repo (get config :deploy-repository)
+(defn exec-mirror-upload [config src-path]
+  (let [deploy-repo (get config :deploy-repository)
         env-user (sys-env-get "NUKE_DEPLOY_USER")
         env-pass (sys-env-get "NUKE_DEPLOY_PASSWORD")
         m2-creds (if (and (or (nil? env-user) (= env-user "")) (or (nil? env-pass) (= env-pass "")) deploy-repo)
@@ -1457,10 +1433,34 @@ window.onload = () => {
         user (if (and env-user (not (= env-user ""))) env-user (if m2-creds (:user m2-creds) nil))
         pass (if (and env-pass (not (= env-pass ""))) env-pass (if m2-creds (:pass m2-creds) nil))]
     (if (nil? src-path)
-      (do (log/error "mirror-upload requires a source path") (sys-exit 1))
+      (do (log/error "mirror upload requires a source path") (sys-exit 1))
       (if (nil? deploy-repo)
         (do (log/error "No :deploy-repository defined in project config") (sys-exit 1))
         (maven/upload-mirror-dir src-path deploy-repo user pass)))))
+
+(defn exec-mirror [config]
+  (let [args (sys-os-args)
+        idx (loop [rem args i 0]
+              (if (empty? rem) -1
+                (if (= (first rem) "mirror") i
+                  (recur (rest rem) (+ i 1)))))
+        subcmd (if (and (not (= idx -1)) (> (count args) (+ idx 1))) (get args (+ idx 1)) nil)
+        path-arg (if (and (not (= idx -1)) (> (count args) (+ idx 2))) (get args (+ idx 2)) nil)]
+    (cond
+      (= subcmd "export") (exec-mirror-export config path-arg)
+      (= subcmd "import") (exec-mirror-import config path-arg)
+      (= subcmd "upload") (exec-mirror-upload config path-arg)
+      :else (do
+              (if (or (nil? subcmd) (= subcmd ""))
+                (do
+                  (log/step "Please provide a mirror subcommand:")
+                  (println "  export <path> - Export project and intrinsic dependencies to a local folder or zip")
+                  (println "  import <path> - Import a local folder or zip into ~/.m2/repository")
+                  (println "  upload <path> - Upload a local mirror to the project's Nexus repository"))
+                (do
+                  (log/error (str "Unknown mirror subcommand: " subcmd))
+                  (println "Available subcommands: export, import, upload")))
+              (sys-exit 1)))))
 
 (def global-tasks (atom {}))
 (def global-task-list (atom []))
@@ -1484,9 +1484,7 @@ window.onload = () => {
 (register-task "upload" ["jar"] "Upload the jar and POM to Nexus" exec-upload)
 (register-task "upload-uberjar" ["zip"] "Upload the uberjar and POM to Nexus" exec-upload-uberjar)
 (register-task "build" ["zip"] "Run the full build pipeline locally" (fn [config] (log/success "Build complete.")))
-(register-task "mirror-export" [] "Export project and intrinsic dependencies to a local folder" exec-mirror-export)
-(register-task "mirror-import" [] "Import a local folder into ~/.m2/repository" exec-mirror-import)
-(register-task "mirror-upload" [] "Upload a local mirror to the project's Nexus repository" exec-mirror-upload)
+(register-task "mirror" [] "Manage offline dependency mirrors (export, import, upload)" exec-mirror)
 (register-task "clean-git-deps" [] "Clear the global git dependency cache (~/.nuke/git-deps)" (fn [config] (git/clean-git-cache)))
 (register-task "dependencies" [] "Show recursively dependencies (local, maven, git)" exec-dependencies)
 
@@ -1544,7 +1542,7 @@ window.onload = () => {
         res-dir (or (:resources config) "src/main/resources")
         java-files (if (io/exists? src-dir) (count (io/find-files src-dir ".java")) 0)
         test-files (if (io/exists? test-dir) (count (io/find-files test-dir ".java")) 0)
-        res-files (if (io/exists? res-dir) (count (filter (fn [f] (not (io/dir? f))) (io/find-files res-dir ""))) 0)
+        res-files (if (io/exists? res-dir) (count (filter (fn [f] (not (io/directory? f))) (io/find-files res-dir ""))) 0)
         test-cases (if (io/exists? test-dir) 
                      (str/trim (:stdout (shell/sh (str "grep -h -r '@Test' " test-dir " 2>/dev/null | wc -l")))) "0")
         test-cases-cnt (if (= test-cases "") "0" (str/trim test-cases))]
