@@ -13,17 +13,18 @@ sed -i.bak "s~(def nuke-commit-msg .*~(def nuke-commit-msg \"$MSG\")~g" .build/m
 rm -f .build/main.coni.bak
 
 if [ -z "$CONI_HOME" ] || [ ! -f "$CONI_HOME/core.coni" ]; then
-    if [ -f "$GITHUB_WORKSPACE/../coni-lang/core.coni" ]; then
-        export CONI_HOME="$GITHUB_WORKSPACE/../coni-lang"
-    elif [ -f "../coni-lang/core.coni" ]; then
-        export CONI_HOME="$(pwd)/../coni-lang"
-    elif [ -f "/home/runner/work/coni-lang/coni-lang/core.coni" ]; then
-        export CONI_HOME="/home/runner/work/coni-lang/coni-lang"
+    echo "[DEBUG] CONI_HOME is not set or missing core.coni. Searching..."
+    FOUND_CORE=$(find /home/runner -name "core.coni" 2>/dev/null | head -n 1 || true)
+    if [ -n "$FOUND_CORE" ]; then
+        export CONI_HOME=$(dirname "$FOUND_CORE")
+        echo "[DEBUG] Found core.coni at $FOUND_CORE. Set CONI_HOME=$CONI_HOME"
     else
         export CONI_HOME=/Users/nico/cool/coni-lang
+        echo "[DEBUG] Could not find core.coni. Defaulting to $CONI_HOME"
     fi
 else
     export CONI_HOME
+    echo "[DEBUG] CONI_HOME already set to $CONI_HOME"
 fi
 
 if [ -z "$CONI_COMPILER" ]; then
