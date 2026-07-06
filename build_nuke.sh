@@ -12,9 +12,13 @@ sed -i.bak "s~(def nuke-build-time .*~(def nuke-build-time \"$DATE\")~g" .build/
 sed -i.bak "s~(def nuke-commit-msg .*~(def nuke-commit-msg \"$MSG\")~g" .build/main.coni
 rm -f .build/main.coni.bak
 
-if [ -z "$CONI_HOME" ]; then
-    if command -v coni >/dev/null 2>&1; then
-        export CONI_HOME=$(dirname $(command -v coni))
+if [ -z "$CONI_HOME" ] || [ ! -f "$CONI_HOME/core.coni" ]; then
+    if [ -f "$GITHUB_WORKSPACE/../coni-lang/core.coni" ]; then
+        export CONI_HOME="$GITHUB_WORKSPACE/../coni-lang"
+    elif [ -f "../coni-lang/core.coni" ]; then
+        export CONI_HOME="$(pwd)/../coni-lang"
+    elif [ -f "/home/runner/work/coni-lang/coni-lang/core.coni" ]; then
+        export CONI_HOME="/home/runner/work/coni-lang/coni-lang"
     else
         export CONI_HOME=/Users/nico/cool/coni-lang
     fi
