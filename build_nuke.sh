@@ -12,7 +12,16 @@ sed -i.bak "s~(def nuke-build-time .*~(def nuke-build-time \"$DATE\")~g" .build/
 sed -i.bak "s~(def nuke-commit-msg .*~(def nuke-commit-msg \"$MSG\")~g" .build/main.coni
 rm -f .build/main.coni.bak
 
-CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang}
+if [ -z "$CONI_HOME" ]; then
+    if command -v coni >/dev/null 2>&1; then
+        export CONI_HOME=$(dirname $(command -v coni))
+    else
+        export CONI_HOME=/Users/nico/cool/coni-lang
+    fi
+else
+    export CONI_HOME
+fi
+
 if [ -z "$CONI_COMPILER" ]; then
     if [ -f "$CONI_HOME/coni" ]; then
         COMPILER="$CONI_HOME/coni"
@@ -25,11 +34,11 @@ fi
 
 if [ "$BUILD_ALL" = "1" ]; then
     mkdir -p .build/mac .build/linux .build/windows
-    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $COMPILER compile-native .build/main.coni -o .build/mac
+    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $COMPILER compile-native .build/main.coni -o .build/mac
     mv .build/mac/main nuke-mac
-    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/linux
+    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/linux
     mv .build/linux/main nuke-linux
-    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/windows
+    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/windows
     mv .build/windows/main.exe nuke.exe 2>/dev/null || mv .build/windows/main nuke.exe
     if [ "$(uname)" = "Linux" ]; then
         cp nuke-linux nuke
@@ -40,7 +49,7 @@ if [ "$BUILD_ALL" = "1" ]; then
     fi
 else
     mkdir -p .build/dev
-    CONI_HOME=${CONI_HOME:-/Users/nico/cool/coni-lang} PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 $COMPILER compile-native .build/main.coni -o .build/dev
+    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 $COMPILER compile-native .build/main.coni -o .build/dev
     mv .build/dev/main nuke
 fi
 
