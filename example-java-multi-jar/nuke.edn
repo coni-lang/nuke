@@ -1,0 +1,11 @@
+{:name "example-java-multi-jar"
+ :version "1.0.0"
+ 
+ :tasks 
+ {:jar-app-a {:extends "jar"
+              :jar-name "out/app-a.jar"
+              :includes ["com/example/**" "app-a.properties"]}
+              
+  :jar-app-b {:extends "jar"
+              :jar-name "out/app-b.jar"
+              :includes ["com/example/**" "app-b.properties"]}}}
