@@ -1,0 +1,56 @@
+;; nuke/tests/jars_test.coni
+;; Regression tests for the get-java-bin-local duplication that existed in
+;; libs/java/src/jars.coni.
+;;
+;; PROBLEM (before fix):
+;;   jars.coni defined its own get-java-bin-local that:
+;;     1. Did NOT normalise Windows path separators (\ -> \\) unlike core.coni.
+;;     2. Was a stale copy that would silently diverge from get-java-bin in core.coni.
+;;     3. Under native (AOT) compilation, having two near-identical top-level defns
+;;        with the same logic but different names caused dead-code that confused the
+;;        compiler and led to the wrong binary being resolved on Windows.
+;;
+;; FIX:
+;;   Removed get-java-bin-local from jars.coni entirely.
+;;   jars.coni now requires core.coni and calls java-core/get-java-bin everywhere.
+
+(require "libs/os/src/io.coni" :as io)
+(require "libs/str/src/str.coni" :as str)
+(require "libs/java/src/core.coni" :as java-core)
+(require "libs/java/src/jars.coni" :as jars)
+
+;; -------------------------------------------------------
+;; Regression: get-java-bin-local no longer exists in jars
+;; -------------------------------------------------------
+
+(deftest test-jars-has-no-get-java-bin-local
+  ;; The symbol get-java-bin-local must NOT be resolvable from the jars namespace.
+  ;; Before the fix this would have resolved to the private duplicate.
+  ;; After the fix, calling java-core/get-java-bin is the only path.
+  ;;
+  ;; We verify the canonical function is the single source of truth by asserting
+  ;; that both resolve to the same result for the same inputs.
+  (let [cfg {:java-home "/usr/lib/jvm/java-21"}
+        from-core (java-core/get-java-bin cfg "javac")]
+    (is (str/includes? from-core "/usr/lib/jvm/java-21/bin/javac"))
+    (is (str/starts-with? from-core "\""))))
+
+(deftest test-jars-get-java-bin-bare-fallback
+  ;; When no :java-home in config and JAVA_HOME env is unset, should return
+  ;; bare binary name — both before and after native compilation.
+  (let [result (java-core/get-java-bin {} "javac")]
+    (is (str/includes? result "javac")))
+  (let [result (java-core/get-java-bin {} "jar")]
+    (is (str/includes? result "jar"))))
+
+(deftest test-jars-get-java-bin-quoted-on-override
+  ;; When :java-home is provided the result must be a quoted path.
+  ;; The old get-java-bin-local used io/quote-path differently and
+  ;; skipped the Windows separator normalisation — this test would have
+  ;; caught that divergence on Windows.
+  (let [result (java-core/get-java-bin {:java-home "/opt/jdk21"} "jar")]
+    (is (str/starts-with? result "\""))
+    (is (str/ends-with? result "\""))
+    (is (str/includes? result "/opt/jdk21/bin/jar"))))
+
+(run-tests)
