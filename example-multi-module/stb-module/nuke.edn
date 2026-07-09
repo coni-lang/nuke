@@ -1,0 +1,9 @@
+{:name "stb-module"
+ :version "1.0.0"
+ :group-id "com.example"
+ 
+ ;; Standard configuration for the child module
+ :src-dir "src/main/java"
+ :resource-dir "src/main/resources"
+ 
+ :dependencies ["commons-io:commons-io:2.11.0"]}

@@ -1,0 +1,13 @@
+{:name "example-multi-module-parent"
+ :version "1.0.0"
+ :group-id "com.example"
+ 
+ ;; PARENT/CHILD SUPPORT
+ ;; Nuke will automatically build these folders first and link them
+ :local-dependencies ["mki-module" 
+                      "stb-module"]
+                      
+ :src-dir "src/main/java"
+ :resource-dir "src/main/resources"
+ :main-class "com.example.Main"
+ :dependencies ["org.slf4j:slf4j-api:1.7.32"]}

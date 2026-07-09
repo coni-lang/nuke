@@ -1,0 +1,14 @@
+{:name "example-multi-src"
+ :version "1.0.0"
+ :group-id "com.example"
+ 
+ ;; NEW NATIVE ARRAY SUPPORT
+ :src-dir ["src/main/java" 
+           "src/main/mki/java"]
+ 
+ :resource-dir ["src/main/resources" 
+                "src/main/mki/resources" 
+                "src/main/stb/resources"]
+ 
+ :main-class "com.example.Main"
+ :dependencies ["org.slf4j:slf4j-api:1.7.32"]}

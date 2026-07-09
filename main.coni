@@ -77,29 +77,55 @@
               (recur (rest rem) acc))))))
     []))
 
-(defn any-file-newer? [dir reference-file]
-  (let [ref-time (sys-file-modtime reference-file)
-        files (io/file-seq dir)]
-    (loop [rem files]
-      (if (empty? rem)
-        false
-        (let [f (first rem)]
-          (if (and (io/file? f) (> (sys-file-modtime f) ref-time))
-            true
-            (recur (rest rem))))))))
+(defn as-dir-list [d default-dir]
+  (if (vector? d) d (if d [d] [default-dir])))
 
-(defn find-test-classes [test-dir]
-  (let [files (io/file-seq test-dir)
-        test-files (filter (fn [f] (and (str/ends-with? f "Test.java") (io/file? f))) files)
-        prefix (if (str/ends-with? test-dir "/") test-dir (str test-dir "/"))]
-    (loop [rem test-files acc []]
-      (if (empty? rem)
-        (str/join "\n" acc)
-        (let [f (first rem)
-              rel (if (str/starts-with? f prefix) (str/substring f (count prefix) (count f)) f)
-              no-ext (str/substring rel 0 (- (count rel) 5))
-              class-name (str/replace (str/replace no-ext "/" ".") "\\" ".")]
-          (recur (rest rem) (conj acc class-name)))))))
+(defn any-file-newer? [dir-or-dirs reference-file]
+  (let [dirs (if (vector? dir-or-dirs) dir-or-dirs [dir-or-dirs])
+        ref-time (sys-file-modtime reference-file)]
+    (loop [rem-dirs dirs]
+      (if (empty? rem-dirs) false
+        (let [files (io/file-seq (first rem-dirs))
+              newer? (loop [rem files]
+                       (if (empty? rem) false
+                         (let [f (first rem)]
+                           (if (and (io/file? f) (> (sys-file-modtime f) ref-time))
+                             true
+                             (recur (rest rem))))))]
+          (if newer? true (recur (rest rem-dirs))))))))
+
+(defn find-test-classes [test-dir-or-dirs]
+  (let [dirs (if (vector? test-dir-or-dirs) test-dir-or-dirs [test-dir-or-dirs])]
+    (loop [rem-dirs dirs all-classes []]
+      (if (empty? rem-dirs)
+        (str/join "\n" all-classes)
+        (let [test-dir (first rem-dirs)
+              files (io/file-seq test-dir)
+              test-files (filter (fn [f] (and (str/ends-with? f "Test.java") (io/file? f))) files)
+              prefix (if (str/ends-with? test-dir "/") test-dir (str test-dir "/"))
+              dir-classes (loop [rem test-files acc []]
+                            (if (empty? rem)
+                              acc
+                              (let [f (first rem)
+                                    rel (if (str/starts-with? f prefix) (str/substring f (count prefix) (count f)) f)
+                                    no-ext (str/substring rel 0 (- (count rel) 5))
+                                    class-name (str/replace (str/replace no-ext "/" ".") "\\" ".")]
+                                (recur (rest rem) (conj acc class-name)))))]
+          (recur (rest rem-dirs) (concat all-classes dir-classes)))))))
+
+(defn find-all-files [dir-or-dirs ext]
+  (let [dirs (if (vector? dir-or-dirs) dir-or-dirs [dir-or-dirs])]
+    (loop [rem dirs acc []]
+      (if (empty? rem) acc
+        (recur (rest rem) (concat acc (io/find-files (first rem) ext)))))))
+
+(defn hash-all-directories [dir-or-dirs ext]
+  (let [dirs (if (vector? dir-or-dirs) dir-or-dirs [dir-or-dirs])]
+    (loop [rem dirs acc ""]
+      (if (empty? rem) (sys-md5 acc)
+        (let [files (io/find-files (first rem) ext)
+              file-hashes (map (fn [f] (sys-md5 (io/read-file f))) files)]
+          (recur (rest rem) (str acc (sys-md5 (str/join "," file-hashes)))))))))
 
 (defn get-active-repos [config]
   (let [mirror (sys-env-get "NUKE_MIRROR")]
@@ -391,22 +417,22 @@
 
 (defn exec-compile [config]
   (io/mkdir-p "classes")
-  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+  (let [src-dirs (as-dir-list (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
         cache-enabled (if (contains? config :build-cache) (:build-cache config) true)
-        java-files (let [base-files (io/find-files src-dir ".java")
+        java-files (let [base-files (find-all-files src-dirs ".java")
                          jaxb-cfg (:jaxb config)
                          jaxb-files (if jaxb-cfg (io/find-files (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb") ".java") [])]
                      (concat base-files jaxb-files))
         cp-jars (get-classpath-jars config "." "compile")
         cache-key (if cache-enabled
-                    (let [src-hash (if (> (count java-files) 0) (hash-directory src-dir ".java") "empty")
+                    (let [src-hash (if (> (count java-files) 0) (hash-all-directories src-dirs ".java") "empty")
                           cp-hash (sys-md5 (str/join "," cp-jars))]
                       (sys-md5 (str src-hash cp-hash)))
                     nil)
         cache-dir (str (sys-env-get "HOME") "/.nuke/build-cache")
         cache-zip (if cache-enabled (str cache-dir "/" cache-key ".zip") nil)
         needs-compile (or (not (io/exists? "classes/.last_compile")) 
-                          (any-file-newer? src-dir "classes/.last_compile"))]
+                          (any-file-newer? src-dirs "classes/.last_compile"))]
     (if needs-compile
       (if (and cache-enabled cache-zip (io/exists? cache-zip))
         (do
@@ -504,10 +530,13 @@
     (if (io/exists? "classes")
       (io/copy-dir-contents "classes" classes-dir)
       nil)
-    (let [res-dir (or (:resource-dir config) "src/main/resources")]
-      (if (io/exists? res-dir)
-        (io/copy-dir-contents res-dir classes-dir)
-        nil))
+    (let [res-dirs (as-dir-list (:resource-dir config) "src/main/resources")]
+      (loop [rem res-dirs]
+        (if (empty? rem) nil
+          (do
+            (if (io/exists? (first rem))
+              (io/copy-dir-contents (first rem) classes-dir))
+            (recur (rest rem))))))
     (let [includes (:includes config)
           excludes (:excludes config)]
       (if (or includes excludes)
@@ -1044,15 +1073,15 @@ window.onload = () => {
                   (log/success "Report saved to target/deps-report.html"))))))))))
 
 (defn exec-test [config]
-  (let [test-dir (or (:test-dir config) (if (io/exists? "src/test/java") "src/test/java" "src/tests"))]
-    (if (io/exists? test-dir)
+  (let [test-dirs (as-dir-list (:test-dir config) (if (io/exists? "src/test/java") "src/test/java" "src/tests"))]
+    (if (> (count (find-all-files test-dirs ".java")) 0)
       (do
         (io/mkdir-p "test-classes")
         (let [needs-compile (or (not (io/exists? "test-classes/.last_test_compile"))
-                                (any-file-newer? test-dir "test-classes/.last_test_compile")
+                                (any-file-newer? test-dirs "test-classes/.last_test_compile")
                                 (any-file-newer? "classes" "test-classes/.last_test_compile"))]
           (if needs-compile
-            (let [java-files (io/find-files test-dir ".java")]
+            (let [java-files (find-all-files test-dirs ".java")]
               (if (> (count java-files) 0)
                 (do
                   (log/step "Running tests...")
@@ -1074,7 +1103,7 @@ window.onload = () => {
                           (log/error "Test compilation failed!")
                           (println (:stderr res))
                           (sys-exit 1))
-                        (let [test-classes (find-test-classes test-dir)]
+                        (let [test-classes (find-test-classes test-dirs)]
                           (if (not (empty? test-classes))
                             (let [args (sys-os-args)
                                   select-class (loop [rem args]
@@ -1152,8 +1181,13 @@ window.onload = () => {
       (do
         (log/step (str "Running " main-class "..."))
         (let [cp-jars (get-classpath-jars config "." "run")
-              res-dir (or (:resource-dir config) "src/main/resources")
-              run-cp-str (str "classes" (if (io/exists? res-dir) (str io/classpath-separator res-dir) "") (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))
+              res-dirs (as-dir-list (:resource-dir config) "src/main/resources")
+              res-cp (loop [rem res-dirs acc ""]
+                       (if (empty? rem) acc
+                         (if (io/exists? (first rem))
+                           (recur (rest rem) (str acc io/classpath-separator (first rem)))
+                           (recur (rest rem) acc))))
+              run-cp-str (str "classes" res-cp (if (empty? cp-jars) "" (str io/classpath-separator cp-jars)))
               env-java-opts (let [env-opts (sys-env-get "JAVA_OPTS")]
                               (if (and env-opts (not (= env-opts ""))) (str/split env-opts " ") []))
               ;; Build argfile to avoid Windows command-line length limits
@@ -1541,14 +1575,15 @@ window.onload = () => {
   (println (str "  Name: " (or (:name config) "app")))
   (println (str "  Version: " (get-app-version config)))
   (println (str "  Main-Class: " (or (:main-class config) "None")))
-  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
-        test-dir (or (:test-dir config) (if (io/exists? "src/tests") "src/tests" "src/test"))
-        res-dir (or (:resources config) "src/main/resources")
-        java-files (if (io/exists? src-dir) (count (io/find-files src-dir ".java")) 0)
-        test-files (if (io/exists? test-dir) (count (io/find-files test-dir ".java")) 0)
-        res-files (if (io/exists? res-dir) (count (filter (fn [f] (not (io/directory? f))) (io/find-files res-dir ""))) 0)
-        test-cases (if (io/exists? test-dir) 
-                     (str/trim (:stdout (shell/sh (str "grep -h -r '@Test' " test-dir " 2>/dev/null | wc -l")))) "0")
+  (let [src-dirs (as-dir-list (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        test-dirs (as-dir-list (:test-dir config) (if (io/exists? "src/tests") "src/tests" "src/test"))
+        res-dirs (as-dir-list (:resources config) "src/main/resources")
+        java-files (count (find-all-files src-dirs ".java"))
+        test-files (count (find-all-files test-dirs ".java"))
+        res-files (count (filter (fn [f] (not (io/directory? f))) (find-all-files res-dirs "")))
+        test-cases (let [valid-test-dirs (filter (fn [d] (io/exists? d)) test-dirs)]
+                     (if (empty? valid-test-dirs) "0"
+                       (str/trim (:stdout (shell/sh (str "grep -h -r '@Test' " (str/join " " valid-test-dirs) " 2>/dev/null | wc -l"))))))
         test-cases-cnt (if (= test-cases "") "0" (str/trim test-cases))]
     (println "  Source Code:")
     (println (str "    Java Classes: " java-files))
@@ -1857,13 +1892,16 @@ window.onload = () => {
     "build"))
 
 (defn nuke-watch [target config]
-  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
-        test-dir (or (:test-dir config) (if (io/exists? "src/tests") "src/tests" "src/test"))
+  (let [src-dirs (as-dir-list (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        test-dirs (as-dir-list (:test-dir config) (if (io/exists? "src/tests") "src/tests" "src/test"))
+        watch-dirs (concat src-dirs test-dirs)
+        valid-watch-dirs (filter (fn [d] (io/exists? d)) watch-dirs)
+        dirs-str (str/join " " valid-watch-dirs)
         get-hash (fn [] 
-                   (let [cmd (str "find " src-dir " " test-dir " nuke.edn -type f 2>/dev/null | xargs stat -f '%m' 2>/dev/null || find " src-dir " " test-dir " nuke.edn -type f 2>/dev/null | xargs stat -c '%Y' 2>/dev/null")
+                   (let [cmd (str "find " dirs-str " nuke.edn -type f 2>/dev/null | xargs stat -f '%m' 2>/dev/null || find " dirs-str " nuke.edn -type f 2>/dev/null | xargs stat -c '%Y' 2>/dev/null")
                          res (str/trim (:stdout (shell/sh cmd)))]
                      (sys-md5 res)))]
-    (println (str " [34m⬡ Nuke Watch Mode — watching: " src-dir ", " test-dir " and nuke.edn [0m"))
+    (println (str " \033[34m⬡ Nuke Watch Mode — watching: " (str/join ", " valid-watch-dirs) " and nuke.edn\033[0m"))
     (println (str "  Target: " target))
     (println "  Press Ctrl+C to stop.
 ")
