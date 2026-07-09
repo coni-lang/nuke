@@ -90,13 +90,32 @@ The build configuration is stored in `nuke.edn` in the root of your project.
 - `:java-home` - Optional override for `$JAVA_HOME`.
 - `:java-version` - Target Java release version (e.g., `"17"`), mapped to `javac --release`.
 - `:java-source` / `:java-target` - Legacy options for `javac -source` and `-target` if `java-version` is unused.
-- `:src-dir` - Source directory (default: `src/main`).
-- `:test-dir` - Test source directory (default: `src/tests`).
-- `:resource-dir` - Resource directory (default: `src/main/resources`). Automatically copied to `classes/`.
+- `:src-dir` - Source directory or array of directories (default: `src/main/java` or `src/main`).
+- `:test-dir` - Test source directory or array of directories (default: `src/test/java` or `src/tests`).
+- `:resource-dir` - Resource directory or array of directories (default: `src/main/resources`). Automatically copied to `classes/`.
 - `:javac-opts` - List of arguments to pass to `javac`.
 - `:encoding` - Source encoding (e.g., `UTF-8`).
 - `:deploy` - Nexus deployment URL (string) or a map of multiple deployment targets (e.g., `{:nexus1 "url1" :nexus2 "url2"}`).
 - `:tasks` - A map of custom task definitions.
+
+## Multiple Source Trees & Modules
+
+Nuke natively supports complex project layouts, whether you want to combine multiple disparate source folders into a single project, or split your codebase into isolated parent/child modules.
+
+### 1. Single Project (Array Support)
+You can provide an array of paths to `:src-dir`, `:test-dir`, and `:resource-dir`. Nuke's compiler, incremental cache, and watch mode will dynamically aggregate all of these trees into a single, unified jar. This is ideal for seamlessly combining legacy source folders without splitting them into separate configuration files.
+
+```edn
+:src-dir ["src/main/java" "src/legacy/java"]
+:resource-dir ["src/main/resources" "src/legacy/resources"]
+```
+
+### 2. Parent/Child Modules
+If you have logically isolated components that need to be built as separate jars, you can define them as child directories (each with their own `nuke.edn`). In your root `nuke.edn`, use `:local-dependencies` to link them. Nuke will automatically traverse into those directories, build them, and include their compiled outputs in your main classpath.
+
+```edn
+:local-dependencies ["core-module" "api-module"]
+```
 
 ## Dependency Scoping
 
@@ -350,7 +369,10 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 
 ## Version History
 
-### v1.3.0 (Latest)
+### v1.4.0 (Latest)
+- **Multiple Source Trees**: Nuke natively supports compiling arrays of source directories (e.g. `:src-dir ["src/main/java" "src/legacy/java"]`). All core tasks including `nuke watch`, the incremental compilation cache, and `nuke test` dynamically aggregate the directories seamlessly. 
+
+### v1.3.0
 - **Dependency Analysis**: `nuke analyze-deps` now generates an interactive HTML report featuring tabbed navigation (Utilized, Unused, and Class Origins), a tree-based hierarchical view of Maven groups, and automatic detection of Java compiler versions and build dates from JARs. Completely unused JAR groups are visually highlighted in red.
 - **Multiple Deploy Targets**: `:deploy` can now be a map of named repositories. Specify the target using `nuke upload <target-name>` or `nuke upload-uberjar <target-name>`. If target is omitted, Nuke will fail-fast and list available options. The IntelliJ plugin adds a gutter menu option for each deployment target.
 - **Git-Based Dependencies**: Pull dependencies directly from git repositories instead of Nexus. Supports tags (cached permanently) and branches (re-fetched and rebuilt on new commits).
