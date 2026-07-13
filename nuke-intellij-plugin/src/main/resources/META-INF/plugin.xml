@@ -11,7 +11,9 @@
     <depends>com.intellij.modules.java</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="Nuke Notifications" displayType="BALLOON"/>
         <toolWindow id="Nuke" anchor="right" icon="AllIcons.Toolwindows.ToolWindowBuild" factoryClass="com.hellonico.nuke.plugin.NukeToolWindowFactory"/>
+        <postStartupActivity implementation="com.hellonico.nuke.plugin.NukeStartupActivity"/>
         <applicationService serviceImplementation="com.hellonico.nuke.plugin.NukeSettings"/>
         <applicationConfigurable parentId="tools" instance="com.hellonico.nuke.plugin.NukeSettingsConfigurable" id="com.hellonico.nuke.plugin.NukeSettingsConfigurable" displayName="Nuke Build"/>
         

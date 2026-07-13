@@ -4,11 +4,12 @@
  
  ;; NEW NATIVE ARRAY SUPPORT
  :src-dir ["src/main/java" 
-           "src/main/mki/java"]
+           "src/main/ikm/java"]
  
  :resource-dir ["src/main/resources" 
-                "src/main/mki/resources" 
-                "src/main/stb/resources"]
+                "src/main/ikm/resources" 
+                "src/main/bts/resources"]
  
  :main-class "com.example.Main"
- :dependencies ["org.slf4j:slf4j-api:1.7.32"]}
+ :dependencies ["org.slf4j:slf4j-api:1.7.32"
+                "org.slf4j:slf4j-nop:1.7.32"]}

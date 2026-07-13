@@ -128,7 +128,8 @@ public class NukeProjectManager {
                 public void startNotified(ProcessEvent event) {}
                 public void processTerminated(ProcessEvent event) {
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        updateClasspath(project);
+                        int jarCount = updateClasspath(project);
+                        notifySyncComplete(project, jarCount);
                         NukeToolWindowFactory.refresh(project);
                     });
                 }
@@ -139,6 +140,13 @@ public class NukeProjectManager {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private static void notifySyncComplete(Project project, int jarCount) {
+        com.intellij.notification.NotificationGroupManager.getInstance()
+            .getNotificationGroup("Nuke Notifications")
+            .createNotification("Nuke Sync Complete", "Synced " + jarCount + " dependencies.", com.intellij.notification.NotificationType.INFORMATION)
+            .notify(project);
     }
 
     private static List<String> getLocalDependencies(String basePath) {
@@ -205,15 +213,17 @@ public class NukeProjectManager {
         }
     }
 
-    private static void updateClasspath(Project project) {
+    private static int updateClasspath(Project project) {
         String basePath = project.getBasePath();
-        if (basePath == null) return;
+        if (basePath == null) return 0;
 
         // --- Phase 1: collect dep dirs without touching IntelliJ models ---
         java.util.Set<String> processed = new java.util.HashSet<>();
         java.util.List<File> depDirs = new java.util.ArrayList<>();
         java.util.Set<String> localProjectNames = new java.util.HashSet<>();
         collectDependencies(basePath, processed, depDirs, localProjectNames);
+
+        java.util.concurrent.atomic.AtomicInteger jarCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
         // --- Phase 2: create / find all modules in ONE write action with ONE commit ---
         ApplicationManager.getApplication().runWriteAction(() -> {
@@ -280,7 +290,7 @@ public class NukeProjectManager {
                             if (f.getName().startsWith(lpn + "-")) { isLocal = true; break; }
                         }
                         if (!isLocal) {
-                            jarUrls.add(VfsUtil.getUrlForLibraryRoot(f));
+                            jarUrls.add("jar://" + f.getAbsolutePath().replace('\\', '/') + "!/");
                         }
                     }
                 }
@@ -310,9 +320,13 @@ public class NukeProjectManager {
                     
                     LibraryTable table = depModel.getModuleLibraryTable();
                     Library library = table.getLibraryByName("NukeDeps");
-                    if (library != null) table.removeLibrary(library);
-                    library = table.createLibrary("NukeDeps");
+                    if (library == null) {
+                        library = table.createLibrary("NukeDeps");
+                    }
                     Library.ModifiableModel libModel = library.getModifiableModel();
+                    for (String url : libModel.getUrls(OrderRootType.CLASSES)) {
+                        libModel.removeRoot(url, OrderRootType.CLASSES);
+                    }
                     for (String url : jarUrls) libModel.addRoot(url, OrderRootType.CLASSES);
                     libModel.commit();
 
@@ -322,7 +336,7 @@ public class NukeProjectManager {
                     VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath());
                     ContentEntry ce = root != null ? depModel.addContentEntry(root) : depModel.addContentEntry(VfsUtil.pathToUrl(depDir.getAbsolutePath()));
                     ce.clearSourceFolders();
-                    java.util.List<String> srcDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":src-dirs");
+                    java.util.List<String> srcDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":src-dir");
                     if (srcDirs.isEmpty()) {
                         if (new File(depDir, "src/main/java").exists()) {
                             srcDirs.add("src/main/java");
@@ -333,6 +347,15 @@ public class NukeProjectManager {
                     for (String dir : srcDirs) {
                         VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/" + dir);
                         if (vf != null) ce.addSourceFolder(vf, false);
+                    }
+                    
+                    java.util.List<String> resourceDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":resource-dir");
+                    if (resourceDirs.isEmpty()) {
+                        resourceDirs.add("src/main/resources");
+                    }
+                    for (String dir : resourceDirs) {
+                        VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(depDir.getAbsolutePath() + "/" + dir);
+                        if (vf != null) ce.addSourceFolder(vf, JavaResourceRootType.RESOURCE);
                     }
                     java.util.List<String> testDirs = parseArray(depDir.getAbsolutePath() + "/nuke.edn", ":test-dirs");
                     if (testDirs.isEmpty()) {
@@ -363,9 +386,13 @@ public class NukeProjectManager {
                 model.inheritSdk();
                 LibraryTable table = model.getModuleLibraryTable();
                 Library library = table.getLibraryByName("NukeDeps");
-                if (library != null) table.removeLibrary(library);
-                library = table.createLibrary("NukeDeps");
+                if (library == null) {
+                    library = table.createLibrary("NukeDeps");
+                }
                 Library.ModifiableModel libModel = library.getModifiableModel();
+                for (String url : libModel.getUrls(OrderRootType.CLASSES)) {
+                    libModel.removeRoot(url, OrderRootType.CLASSES);
+                }
                 for (String url : jarUrls) libModel.addRoot(url, OrderRootType.CLASSES);
                 libModel.commit();
 
@@ -375,7 +402,7 @@ public class NukeProjectManager {
                 VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath);
                 ContentEntry entry = root != null ? model.addContentEntry(root) : model.addContentEntry(VfsUtil.pathToUrl(basePath));
                 entry.clearSourceFolders();
-                java.util.List<String> srcDirs = parseArray(basePath + "/nuke.edn", ":src-dirs");
+                java.util.List<String> srcDirs = parseArray(basePath + "/nuke.edn", ":src-dir");
                 if (srcDirs.isEmpty()) {
                     if (new File(basePath, "src/main/java").exists()) {
                         srcDirs.add("src/main/java");
@@ -387,7 +414,7 @@ public class NukeProjectManager {
                     VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/" + dir);
                     if (vf != null) entry.addSourceFolder(vf, false);
                 }
-                java.util.List<String> testDirs = parseArray(basePath + "/nuke.edn", ":test-dirs");
+                java.util.List<String> testDirs = parseArray(basePath + "/nuke.edn", ":test-dir");
                 if (testDirs.isEmpty()) {
                     if (new File(basePath, "src/test/java").exists()) {
                         testDirs.add("src/test/java");
@@ -399,8 +426,16 @@ public class NukeProjectManager {
                     VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/" + dir);
                     if (vf != null) entry.addSourceFolder(vf, true);
                 }
-                VirtualFile resources = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/src/main/resources");
-                if (resources != null) entry.addSourceFolder(resources, JavaResourceRootType.RESOURCE);
+                
+                java.util.List<String> resourceDirs = parseArray(basePath + "/nuke.edn", ":resource-dir");
+                if (resourceDirs.isEmpty()) {
+                    resourceDirs.add("src/main/resources");
+                }
+                for (String dir : resourceDirs) {
+                    VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByPath(basePath + "/" + dir);
+                    if (vf != null) entry.addSourceFolder(vf, JavaResourceRootType.RESOURCE);
+                }
+                
                 CompilerModuleExtension compilerExtension = model.getModuleExtension(CompilerModuleExtension.class);
                 if (compilerExtension != null) {
                     compilerExtension.inheritCompilerOutputPath(false);
@@ -408,14 +443,16 @@ public class NukeProjectManager {
                     compilerExtension.setCompilerOutputPathForTests(VfsUtil.pathToUrl(basePath + "/build/classes/java/test"));
                 }
             });
+            jarCount.set(jarUrls.size());
         });
+        return jarCount.get();
     }
 
     private static java.util.List<String> parseArray(String ednPath, String key) {
         java.util.List<String> res = new ArrayList<>();
         try {
             String content = java.nio.file.Files.readString(java.nio.file.Paths.get(ednPath));
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile(key + "\\s*\\[([^\\]]+)\\]").matcher(content);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(key + "s?\\s*\\[([^\\]]+)\\]").matcher(content);
             if (m.find()) {
                 java.util.regex.Matcher sm = java.util.regex.Pattern.compile("\"([^\"]+)\"").matcher(m.group(1));
                 while (sm.find()) {
@@ -431,20 +468,26 @@ public class NukeProjectManager {
         try {
             ProcessBuilder pb = new ProcessBuilder(getNukeExecutable(), "classpath");
             pb.directory(new File(basePath));
+            pb.redirectErrorStream(true);
             Process p = pb.start();
             java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
-            String line = reader.readLine();
-            if (line != null && !line.trim().isEmpty()) {
-                String[] parts = line.trim().split(":");
-                for (String part : parts) {
-                    if (!part.isEmpty()) {
-                        paths.add(part);
+            String line;
+            StringBuilder output = new StringBuilder();
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+                if (!line.trim().isEmpty() && line.contains(".jar")) {
+                    String[] parts = line.trim().split(":");
+                    for (String part : parts) {
+                        if (!part.isEmpty()) {
+                            paths.add(part);
+                        }
                     }
                 }
             }
             p.waitFor();
+            com.intellij.openapi.diagnostic.Logger.getInstance(NukeProjectManager.class).info("Nuke classpath output for " + basePath + ":\n" + output.toString());
         } catch (Exception e) {
-            e.printStackTrace();
+            com.intellij.openapi.diagnostic.Logger.getInstance(NukeProjectManager.class).error("Error getting classpath", e);
         }
         return paths;
     }
