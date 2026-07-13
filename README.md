@@ -27,13 +27,14 @@ In your project root, run `nuke <task>`. If no task is provided, `nuke build` is
 - `nuke test` - Run JUnit tests
 - `nuke metrics` - Run tests with JaCoCo agent and generate coverage reports
 - `nuke analyze` - Run full static analysis (SpotBugs, PMD, Checkstyle) and generate the unified `nuke-analysis.html` dashboard
+- `nuke audit` - Run full security, code, and project audit (detects vulnerabilities via OSV.dev and static code flaws) and generate an interactive HTML report
 - `nuke run` - Run the Java application (requires `:main-class`)
 - `nuke jar` - Create a standard thin jar
 - `nuke uberjar` - Create an executable fat jar
 - `nuke upload` - Upload the jar and POM to a Nexus repository
 - `nuke tasks` - List all available tasks
 - `nuke info` - Display project metadata
-- `nuke onefetch` - Display a comprehensive git repository summary (stats, language breakdown, and commit matrix)
+- `nuke onefetch` - Display a comprehensive git repository summary
 
 ### Skipping Tasks
 
@@ -258,6 +259,24 @@ nuke analyze-deps --report cli
 ```
 The HTML dashboard gives you a powerful two-way view: it lists all your unused dependencies (which can be safely removed from `nuke.edn` to speed up builds and reduce bundle size), and it lets you browse exactly which classes were loaded from which jars.
 
+### Security Audit & Reporting
+
+Nuke includes a built-in security auditing engine to detect both static code flaws and dependency vulnerabilities:
+
+```bash
+# Generate an interactive HTML audit report (target/security-report.html)
+nuke audit
+
+# Output the audit report in JSON or EDN formats for CI/CD integration
+nuke audit-json
+nuke audit-edn
+```
+
+The auditing engine performs:
+- **Dependency Vulnerabilities**: Queries OSV.dev to detect known CVEs in your declared Maven dependencies.
+- **Dangerous Tasks**: Analyzes your `nuke.edn` for tasks containing potentially malicious shell commands or unverified remote plugins.
+- **Static Code Findings**: Scans your Java source files for dangerous patterns like `System.exit()`, `printStackTrace()`, and hardcoded passwords.
+
 ### Authentication
 
 - **SSH** (`git@` or `ssh://`): Uses your standard SSH agent and key configuration. No extra setup needed.
@@ -337,6 +356,13 @@ By default, Nuke expects a standard directory layout:
 └── target/            # Generated jars and zips
 ```
 
+## Example Projects
+
+Nuke ships with several built-in example projects to demonstrate key capabilities:
+- **`example-java-vulnerable`**: An intentionally vulnerable project featuring insecure Log4j dependencies, hardcoded passwords, and dangerous shell tasks. Used to demonstrate the `nuke audit` engine and interactive security reports.
+- **`example-multi-src`**: A multi-source project demonstrating Nuke's array-based compilation (`:src-dir ["src/main/java" "src/main/ikm/java"]`). Integrates flawlessly with the IntelliJ plugin for unified IDE sync.
+- **`example-java-scopes`**: Demonstrates Maven dependency isolation between `:compile`, `:provided`, and `:test` scopes.
+
 ## Airgap & Offline Environments
 
 Nuke natively supports running entirely offline or in airgapped networks without a central Maven repository.
@@ -370,7 +396,9 @@ Nuke is written entirely in Coni (`main.coni`) and leverages basic tools (`curl`
 ## Version History
 
 ### v1.4.0 (Latest)
-- **Multiple Source Trees**: Nuke natively supports compiling arrays of source directories (e.g. `:src-dir ["src/main/java" "src/legacy/java"]`). All core tasks including `nuke watch`, the incremental compilation cache, and `nuke test` dynamically aggregate the directories seamlessly. 
+- **Multiple Source Trees**: Nuke natively supports compiling arrays of source directories (e.g. `:src-dir ["src/main/java" "src/legacy/java"]`). All core tasks including `nuke watch`, the incremental compilation cache, and `nuke test` dynamically aggregate the directories seamlessly.
+- **IntelliJ Array Support & Fixes**: The `nuke-intellij-plugin` has been updated to automatically sync multiple array-based source and resource directories into the IDE project model. Additionally, fixed IDE race conditions during initialization and plugin disposal memory leaks.
+- **Security Audit Engine**: New `nuke audit`, `nuke audit-json`, and `nuke audit-edn` tasks to perform holistic security scans. Automatically queries OSV.dev for known dependency vulnerabilities, detects dangerous remote plugins and shell tasks in `nuke.edn`, and scans Java files for insecure patterns. Generates a beautifully interactive HTML report.
 
 ### v1.3.0
 - **Dependency Analysis**: `nuke analyze-deps` now generates an interactive HTML report featuring tabbed navigation (Utilized, Unused, and Class Origins), a tree-based hierarchical view of Maven groups, and automatic detection of Java compiler versions and build dates from JARs. Completely unused JAR groups are visually highlighted in red.
