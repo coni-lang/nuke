@@ -1,0 +1,10 @@
+{:name "example-java-vulnerable"
+ :version "1.0.0"
+ :group-id "com.example"
+
+ :src-dir "src/main"
+
+ :tasks {"test-script" {:coni-code "(println (require \"libs/java/src/test-math2.coni\"))"}}
+ :dependencies [{:coord "org.apache.logging.log4j:log4j-core:2.14.1"}
+                {:coord "commons-collections:commons-collections:3.2.1"}
+                {:coord "junit:junit:4.13.2" :scope "test"}]}

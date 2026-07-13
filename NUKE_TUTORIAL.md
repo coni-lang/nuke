@@ -670,6 +670,9 @@ nuke mirror import nuke-mirror.zip
 
 This copies all jars into `~/.m2/repository`. All subsequent nuke commands work offline.
 
+> [!NOTE]
+> In older versions of Nuke, `nuke mirror export` didn't include `org.jacoco.agent-0.8.11-runtime.jar`. Since it's bundled inside `org.jacoco.agent-0.8.11.jar`, you could extract it and rename it, and the agent then ran successfully. This has been fixed natively in recent versions.
+
 ### Upload to Nexus
 
 ```sh

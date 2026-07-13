@@ -7,6 +7,8 @@
 (require "libs/java/src/core.coni" :as java)
 (require "libs/java/src/jars.coni" :as jars)
 (require "libs/java/src/git.coni" :as git)
+(require "libs/java/src/metrics.coni" :as metrics)
+(require "libs/java/src/analysis.coni" :as analysis)
 
 (def nuke-version "1.3.0")
 (def nuke-build-time "DEV")
@@ -614,27 +616,32 @@
             found-url)
           "Local")))))
 
-(defn exec-analyze-deps [config]
-  (let [args (sys-os-args)
-        report-type (loop [rem args]
-                      (if (empty? rem) "html"
-                        (if (or (= (first rem) "--report") (= (first rem) "-report"))
-                          (if (> (count rem) 1) (get rem 1) "html")
-                          (recur (rest rem)))))
-        src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
-        java-files (let [base-files (io/find-files src-dir ".java")
+(defn exec-analyze-deps [config format]
+  (let [src-dirs (as-dir-list (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        java-files (let [base-files (reduce concat [] (map (fn [d] (io/find-files d ".java")) src-dirs))
                          jaxb-cfg (:jaxb config)
                          jaxb-files (if jaxb-cfg (io/find-files (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb") ".java") [])]
                      (concat base-files jaxb-files))]
     (if (empty? java-files)
       (log/warn "No java files found. Skipping dependency analysis.")
       (do
-        (log/step "Running javac with -verbose to track dependencies...")
+        (log/step "Resolving compile dependencies...")
         (let [cp-jars (get-classpath-jars config "." "compile")
-              encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
-              java-version-arg (if (:java-version config) (str "--release " (:java-version config))
-                                (if (and (:java-source config) (:java-target config))
-                                    (str "-source " (:java-source config) " -target " (:java-target config)) ""))
+              src-hash (if (> (count java-files) 0) (hash-all-directories src-dirs ".java") "empty")
+              cp-hash (sys-md5 (str/join "," cp-jars))
+              deps-hash (sys-md5 (str src-hash cp-hash))
+              cache-file ".nuke-tmp/deps-hash.txt"
+              prev-hash (if (and (io/exists? cache-file) (io/exists? "target/deps-report.html")) (io/read-file cache-file) "none")]
+          (if (= deps-hash prev-hash)
+            (do
+              (log/success "Dependencies unchanged (cached). Using existing deps-report.html.")
+              (if (or (= format "file") (= format "html"))
+                (println "  ✓ Report saved to target/deps-report.html"))
+              {:status "cached" :jars (count cp-jars)})
+            (let [encoding-arg (if (:encoding config) (str "-encoding " (:encoding config)) "")
+                  java-version-arg (if (:java-version config) (str "--release " (:java-version config))
+                                    (if (and (:java-source config) (:java-target config))
+                                        (str "-source " (:java-source config) " -target " (:java-target config)) ""))
               tmp-classes ".nuke-tmp/deps-classes"
               _ (io/mkdir-p tmp-classes)
               argfile-args (reduce concat []
@@ -645,6 +652,7 @@
                               java-files])
               argfile-path (write-argfile argfile-args "deps-compile-args.txt")
               cmd (str (java/get-java-bin config "javac") " @" argfile-path)
+              _ (log/step "Running javac with -verbose to track dependencies...")
               res (shell/sh cmd)
               out-str (str (:stderr res) "\n" (:stdout res))
               lines (str/split out-str "\n")
@@ -706,6 +714,9 @@
                                 (swap! jar-infos assoc (first parts) {:version (nth parts 1) :date (nth parts 2)}))
                               (recur (rest lines)))))
                       
+                      ;; Fetch CVEs
+                      cves (atom {})
+
                       ;; JSON Generators
                       escape-js (fn [s] (str/replace (str/replace s "\\" "\\\\") "\"" "\\\""))
                       to-js-arr (fn [lst] (str "[" (str/join "," (map (fn [x] (str "\"" (escape-js x) "\"")) lst)) "]"))
@@ -720,19 +731,24 @@
                                          (map (fn [j]
                                                 (let [info (get @jar-infos j {:version "?" :date "?"})
                                                       origin (get-origin j (get-active-repos config))
-                                                      classes (get @jar-to-classes j [])]
-                                                  (str "\"" (escape-js j) "\": {version: \"" (:version info) "\", date: \"" (:date info) "\", origin: \"" (escape-js origin) "\", classes: " (to-js-arr classes) "}")))
+                                                      classes (get @jar-to-classes j [])
+                                                      cve-data (get @cves j "null")]
+                                                  (str "\"" (escape-js j) "\": {version: \"" (:version info) "\", date: \"" (:date info) "\", origin: \"" (escape-js origin) "\", classes: " (to-js-arr classes) ", cves: " cve-data "}")))
                                               used-jars-list))
                                    "}")
                       
                       html-content (str "<!DOCTYPE html><html><head><title>Nuke Dependency Report</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-body { font-family: 'Inter', sans-serif; padding: 40px; background: #0f172a; color: #f8fafc; margin: 0; }
-h1 { color: #38bdf8; font-weight: 600; margin-bottom: 20px; }
-.header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-.container { max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; height: calc(100vh - 120px); }
-.card { background: #1e293b; padding: 25px; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;800&display=swap');
+:root { --bg: #09090b; --panel: rgba(24, 24, 27, 0.6); --border: rgba(255, 255, 255, 0.1); --primary: #38bdf8; --danger: #ef4444; --text: #f8fafc; --muted: #94a3b8; }
+body { font-family: 'Outfit', sans-serif; background: radial-gradient(circle at top right, #1e1b4b, #09090b 50%); background-attachment: fixed; color: var(--text); margin: 0; padding: 3rem; min-height: 100vh; }
+.nav { display: flex; gap: 1.5rem; margin-bottom: 2rem; padding: 1rem 2rem; background: var(--panel); backdrop-filter: blur(12px); border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+.nav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 1.1rem; transition: all 0.3s ease; padding: 0.5rem 1rem; border-radius: 8px; }
+.nav a:hover, .nav a.active { color: var(--text); background: rgba(255,255,255,0.05); transform: translateY(-2px); }
+h1 { color: transparent; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; font-weight: 800; margin-bottom: 20px; font-size: 2.5rem; }
+.header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.container { max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; height: calc(100vh - 80px); }
+.card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); padding: 25px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 8px 32px rgba(0,0,0,0.2); flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #334155; }
 .tab { padding: 10px 20px; cursor: pointer; color: #94a3b8; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.2s; }
 .tab:hover { color: #cbd5e1; }
@@ -1032,10 +1048,11 @@ window.onload = () => {
 </script>
 </head><body>
 <div class='container'>
+
   <div class='header-bar'>
-    <h1 style='margin:0;'>Compile-Time Dependency Report</h1>
+    <h1 style='margin:0;'><svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='vertical-align: middle; margin-right: 1rem; color: #38bdf8;'><path d='M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z'/><path d='M12 14v7'/><path d='M7 12a5 5 0 0 1 10 0'/><path d='M18.3 6.3a14 14 0 0 0-12.6 0'/><path d='M13.7 11 18 3.5'/><path d='M10.3 11 6 3.5'/></svg>Compile-Time Dependency Report</h1>
     <label class='checkbox-label'>
-      <input type='checkbox' id='hide-jdk' onchange='renderAll()'> Hide JDK Modules
+      <input type='checkbox' id='hide-jdk' onchange='renderAll()' checked> Hide JDK Modules
     </label>
   </div>
   
@@ -1069,8 +1086,31 @@ window.onload = () => {
   </div>
   
 </div></body></html>")]
+              (if (or (= format "file") (= format "html"))
+                (do
+                  (println "    Generating HTML report (target/deps-report.html)...")
                   (io/write-file "target/deps-report.html" html-content)
-                  (log/success "Report saved to target/deps-report.html"))))))))))
+                  (io/write-file cache-file deps-hash)
+                  (println "  ✓ Report saved to target/deps-report.html"))
+                (do
+                  (println "\n=== Utilized Jars ===")
+                  (loop [rem used-jars]
+                    (if (not (empty? rem))
+                      (do (println (str "  - " (first rem)))
+                          (recur (rest rem)))))
+                  (println "\n=== Unused Jars ===")
+                  (loop [rem unused-jars]
+                    (if (not (empty? rem))
+                      (do (println (str "  - " (first rem)))
+                          (recur (rest rem)))))
+                  (println "\n=== Repositories ===")
+                  (loop [rem (keys repos)]
+                    (if (not (empty? rem))
+                      (do (println (str "  - " (first rem) " (" (count (get repos (first rem))) " jars)"))
+                          (recur (rest rem))))))))
+          {:used-jars used-jars
+           :unused-jars unused-jars
+           :repositories repos}))))))))))
 
 (defn exec-test [config]
   (let [test-dirs (as-dir-list (:test-dir config) (if (io/exists? "src/test/java") "src/test/java" "src/tests"))]
@@ -1158,6 +1198,25 @@ window.onload = () => {
                               (let [test-res (shell/sh full-cmd)]
                                 (io/mkdir-p "target")
                                 (io/write-file "target/test-report.txt" (:stdout test-res))
+                                (let [out (:stdout test-res)
+                                      lines (str/split out "\n")
+                                      ok-line (first (filter (fn [l] (str/starts-with? (str/trim l) "OK (")) lines))
+                                      fail-line (first (filter (fn [l] (str/includes? l "FAILURES!!!")) lines))
+                                      tests-count (if ok-line (str/replace (str/replace (str/trim ok-line) "OK (" "") " test)" "") (if fail-line "Failed" "Unknown"))
+                                      status (if (= 0 (:code test-res)) "✅ PASS" "❌ FAIL")
+                                      time-line (first (filter (fn [l] (str/starts-with? (str/trim l) "Time: ")) lines))
+                                      time-val (if time-line (str/replace (str/trim time-line) "Time: " "") "N/A")
+                                      html (str "<!DOCTYPE html><html><head><title>Nuke Test Report</title><style>@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap'); :root { --bg: #09090b; --panel: rgba(24, 24, 27, 0.6); --border: rgba(255, 255, 255, 0.1); --primary: #38bdf8; --danger: #ef4444; --text: #f8fafc; --muted: #94a3b8; } body { font-family: 'Outfit', sans-serif; background: radial-gradient(circle at top right, #1e1b4b, #09090b 50%); background-attachment: fixed; color: var(--text); margin: 0; padding: 3rem; min-height: 100vh; } .nav { display: flex; gap: 1.5rem; margin-bottom: 3rem; padding: 1rem 2rem; background: var(--panel); backdrop-filter: blur(12px); border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.3); } .nav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 1.1rem; transition: all 0.3s ease; padding: 0.5rem 1rem; border-radius: 8px; } .nav a:hover, .nav a.active { color: var(--text); background: rgba(255,255,255,0.05); transform: translateY(-2px); } h1 { font-size: 3rem; font-weight: 800; margin-bottom: 2rem; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; } .card { background: var(--panel); backdrop-filter: blur(10px); padding: 2rem; border-radius: 12px; margin-bottom: 2rem; border: 1px solid var(--border); } pre { background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; overflow-x: auto; color: #cbd5e1; font-family: monospace; } table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; } th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid var(--border); } th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px; } td { color: var(--text); } tr:last-child td { border-bottom: none; } .badge { padding: 4px 10px; border-radius: 12px; font-size: 0.85rem; font-weight: 600; } .badge.pass { background: rgba(16, 185, 129, 0.2); color: #10b981; } .badge.fail { background: rgba(239, 68, 68, 0.2); color: #ef4444; }</style></head><body>"
+                                                ""
+                                                "<h1><svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='vertical-align: text-bottom; margin-right: 1rem; color: #38bdf8;'><path d='M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z'/><path d='M12 14v7'/><path d='M7 12a5 5 0 0 1 10 0'/><path d='M18.3 6.3a14 14 0 0 0-12.6 0'/><path d='M13.7 11 18 3.5'/><path d='M10.3 11 6 3.5'/></svg>Test Report</h1>"
+                                                "<div class='card'><h2>Test Execution Summary</h2><table><thead><tr><th>Total Tests</th><th>Time (s)</th><th>Status</th></tr></thead><tbody><tr><td>" tests-count "</td><td>" time-val "</td><td><span class='badge " (if (= 0 (:code test-res)) "pass" "fail") "'>" status "</span></td></tr></tbody></table></div>"
+                                                "<div class='card'><h2>Test Classes Executed</h2><table><thead><tr><th>Class Name</th><th>Status</th></tr></thead><tbody>"
+                                                (str/join "" (map (fn [c] (str "<tr><td style='font-family: monospace; color: #a78bfa;'>" c "</td><td><span class='badge " (if (= 0 (:code test-res)) "pass" "fail") "'>" (if (= 0 (:code test-res)) "PASS" "SEE LOGS") "</span></td></tr>")) test-classes-list))
+                                                "</tbody></table></div>"
+                                                "<div class='card'><h2>Raw Output</h2><details><summary style='color: var(--muted); cursor: pointer; margin-bottom: 0.5rem; outline: none;'>View Raw Test Logs</summary><pre>"
+                                                (str/replace (str/replace out "<" "&lt;") ">" "&gt;")
+                                                "</pre></details></div></body></html>")]
+                                  (io/write-file "target/test-report.html" html))
                                 (println (:stdout test-res))
                                 (if (not (= 0 (:code test-res)))
                                   (do
@@ -1428,11 +1487,14 @@ window.onload = () => {
               (do (copy-m2-artifact (first rem) actual-target)
                   (recur (rest rem))))))
         (let [ep-jar (maven/coord-to-m2-path "com.google.errorprone" "error_prone_core" ep-v "with-dependencies.jar")
-              jc-jar (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")]
-          (java/download-jar repos "com.google.errorprone" "error_prone_core" ep-v "with-dependencies.jar" ep-jar)
-          (java/download-jar repos "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar" jc-jar)
+              jc-jar (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")
+              cli-jar (maven/coord-to-m2-path "org.jacoco" "org.jacoco.cli" jacoco-v "nodeps.jar")]
+          (java/download-jar repos (str "com/google/errorprone/error_prone_core/" ep-v "/error_prone_core-" ep-v "-with-dependencies.jar") ep-jar)
+          (java/download-jar repos (str "org/jacoco/org.jacoco.agent/" jacoco-v "/org.jacoco.agent-" jacoco-v "-runtime.jar") jc-jar)
+          (java/download-jar repos (str "org/jacoco/org.jacoco.cli/" jacoco-v "/org.jacoco.cli-" jacoco-v "-nodeps.jar") cli-jar)
           (copy-m2-artifact ep-jar actual-target)
-          (copy-m2-artifact jc-jar actual-target))
+          (copy-m2-artifact jc-jar actual-target)
+          (copy-m2-artifact cli-jar actual-target))
         (if is-zip
           (do
             (log/step "Zipping mirror...")
@@ -1631,6 +1693,7 @@ window.onload = () => {
                 desc (:desc tinfo)
                 cmds (or (:cmds tinfo) [])
                 coni-code (:coni tinfo)
+                native-fn (:native-fn tinfo)
                 extends-task-raw (:extends tinfo)
                 extends-task (if extends-task-raw
                                (let [etr-str (str extends-task-raw)]
@@ -1650,9 +1713,12 @@ window.onload = () => {
                                 (do
                                   (println (str "Error: base task '" extends-task "' not found for task '" tname "'"))
                                   (sys-exit 1)))))
+                          (if (and (not (nil? native-fn)) (or (= (type native-fn) "Function") (= (type native-fn) "Builtin")))
+                            (native-fn cfg))
                           (if coni-code
-                            (let [code (io/read-coni-code coni-code)]
-                              (eval-string code)))
+                            (do
+                              (println (str "DEBUG: Evaluating coni-code for task " tname))
+                              (eval-string coni-code)))
                           (loop [crem cmds]
                             (if (not (empty? crem))
                               (let [cmd-str (first crem)
@@ -1863,6 +1929,228 @@ window.onload = () => {
         (if (< w 7)
           (do (println (get matrix-lines w)) (recur (+ w 1)))))
       (println ""))))
+
+(defn exec-audit-project [config format]
+  (println "\n\033[36m=== Project Info Audit ===\033[0m")
+  (let [deps (or (:dependencies config) [])
+        deps-html (if (empty? deps) "<p style='color: var(--muted); margin-left: 1rem; margin-top: 0;'>None</p>"
+                    (str "<ul style='list-style: none; padding-left: 1rem; margin-top: 0; font-family: ui-monospace, monospace; color: #a78bfa;'>"
+                         (str/join "" (map (fn [d] (str "<li style='margin-bottom: 0.25rem;'>- " (if (map? d) (:coord d) (str d)) "</li>")) deps))
+                         "</ul>"))
+        html (str "<!DOCTYPE html><html><head><title>Nuke Project Info</title><style>@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap'); :root { --bg: #09090b; --panel: rgba(24, 24, 27, 0.6); --border: rgba(255, 255, 255, 0.1); --primary: #38bdf8; --danger: #ef4444; --text: #f8fafc; --muted: #94a3b8; } body { font-family: 'Outfit', sans-serif; background: radial-gradient(circle at top right, #1e1b4b, #09090b 50%); background-attachment: fixed; color: var(--text); margin: 0; padding: 3rem; min-height: 100vh; } .nav { display: flex; gap: 1.5rem; margin-bottom: 3rem; padding: 1rem 2rem; background: var(--panel); backdrop-filter: blur(12px); border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.3); } .nav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 1.1rem; transition: all 0.3s ease; padding: 0.5rem 1rem; border-radius: 8px; } .nav a:hover, .nav a.active { color: var(--text); background: rgba(255,255,255,0.05); transform: translateY(-2px); } h1 { font-size: 3rem; font-weight: 800; margin-bottom: 2rem; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: fade-in-up 0.6s ease-out; } h2 { font-size: 1.5rem; font-weight: 600; margin-top: 0; margin-bottom: 1.5rem; color: #e2e8f0; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; } .card { background: var(--panel); backdrop-filter: blur(10px); padding: 2rem; border-radius: 12px; margin-bottom: 1rem; border: 1px solid var(--border); animation: fade-in-up 0.6s ease-out backwards; max-width: 800px; } .meta-row { display: flex; margin-bottom: 0.75rem; font-size: 1.1rem; } .meta-key { width: 140px; color: var(--muted); font-weight: 600; } .meta-val { color: var(--text); } @keyframes fade-in-up { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }</style></head><body>"
+                  ""
+                  "<h1><svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='vertical-align: text-bottom; margin-right: 1rem; color: #38bdf8;'><path d='M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z'/><path d='M12 14v7'/><path d='M7 12a5 5 0 0 1 10 0'/><path d='M18.3 6.3a14 14 0 0 0-12.6 0'/><path d='M13.7 11 18 3.5'/><path d='M10.3 11 6 3.5'/></svg>Project Info</h1>"
+                  "<div class='card'><h2>Project Metadata</h2>"
+                  "<div class='meta-row'><div class='meta-key'>Name:</div><div class='meta-val'>" (or (:name config) "Unknown") "</div></div>"
+                  "<div class='meta-row'><div class='meta-key'>Version:</div><div class='meta-val'>" (or (:version config) "Unknown") "</div></div>"
+                  "<div class='meta-row'><div class='meta-key'>Main-Class:</div><div class='meta-val'>" (or (:main-class config) "None") "</div></div>"
+                  "<div class='meta-row'><div class='meta-key'>Dependencies:</div></div>"
+                  deps-html
+                  "</div>"
+                  "</body></html>")]
+    (if (or (= format "html") (= format "file"))
+      (do
+        (io/write-file "target/project-info-report.html" html)
+        (println "Project info generated: target/project-info-report.html")))
+    {:name (or (:name config) "Unknown")
+     :version (or (:version config) "Unknown")
+     :main-class (or (:main-class config) "None")
+     :dependencies (or (:dependencies config) [])}))
+
+(defn exec-audit-security [config format]
+  (println "\n\033[36m=== Security Audit ===\033[0m")
+  (let [tasks (or (:tasks config) {})
+        dangerous-tasks (atom [])
+        plugins (or (:plugins config) [])
+        dangerous-plugins (atom [])]
+    (loop [kvs (seq tasks)]
+      (if (not (empty? kvs))
+        (let [k (first (first kvs))
+              v (second (first kvs))]
+          (if (and (map? v) (or (:shell v) (:cmds v)))
+            (swap! dangerous-tasks conj {:name k :task v}))
+          (recur (rest kvs)))))
+    (loop [ps plugins]
+      (if (not (empty? ps))
+        (let [p (first ps)]
+          (if (and (string? p) (str/starts-with? p "http"))
+            (swap! dangerous-plugins conj p))
+          (recur (rest ps)))))
+    (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+          java-files (io/find-files src-dir ".java")
+          findings (atom [])]
+      (loop [fs java-files]
+        (if (not (empty? fs))
+          (let [f (first fs)
+                content (io/read-file f)
+                lines (str/split content "\n")]
+            (loop [idx 0]
+              (if (< idx (count lines))
+                (let [l (nth lines idx)
+                      code (str (if (> idx 0) (nth lines (- idx 1)) "") "\n" l "\n" (if (< (+ idx 1) (count lines)) (nth lines (+ idx 1)) ""))
+                      safe-code (str/replace (str/replace code "<" "&lt;") ">" "&gt;")]
+                  (if (str/includes? l "System.exit")
+                    (swap! findings conj {:file f :line (+ idx 1) :msg "System.exit() used" :code safe-code}))
+                  (if (str/includes? l "printStackTrace")
+                    (swap! findings conj {:file f :line (+ idx 1) :msg "printStackTrace() used (use logger)" :code safe-code}))
+                  (if (and (str/includes? (str/lower-case l) "password") (str/includes? l "=") (str/includes? l "\""))
+                    (swap! findings conj {:file f :line (+ idx 1) :msg "Possible hardcoded password" :code safe-code}))
+                  (recur (+ idx 1)))))
+            (recur (rest fs)))))
+      (let [proj-deps (or (:dependencies config) [])
+            vuln-deps (atom [])]
+      (println (str "Querying OSV.dev for vulnerabilities (" (count proj-deps) " dependencies)..."))
+      (loop [ds proj-deps]
+        (if (not (empty? ds))
+          (let [d (first ds)
+                coord (if (map? d) (:coord d) (str d))
+                parts (str/split coord ":")]
+            (if (= (count parts) 3)
+              (let [group (nth parts 0)
+                    artifact (nth parts 1)
+                    version (nth parts 2)
+                    req (str "{\"package\":{\"name\":\"" group ":" artifact "\",\"ecosystem\":\"Maven\"},\"version\":\"" version "\"}")
+                    _ (io/mkdir-p ".nuke-tmp")
+                    _ (io/write-file ".nuke-tmp/osv-req.json" req)
+                    _ (println (str "  -> Checking " group ":" artifact ":" version "..."))
+                    res (shell/sh "curl -s -X POST -H \"Content-Type: application/json\" -d @.nuke-tmp/osv-req.json https://api.osv.dev/v1/query")]
+                (if (and (= (:code res) 0) (not= (str/trim (:stdout res)) "{}"))
+                  (do
+                    (println (str "    \033[31m[!] Vulnerabilities found in " coord "!\033[0m"))
+                    (swap! vuln-deps conj {:coord coord :data (:stdout res)}))
+                  (println (str "    \033[32m[OK]\033[0m No vulnerabilities found."))))
+              (println (str "    [WARN] Invalid dependency coord format: " coord)))
+            (recur (rest ds)))))
+      (let [html (str "<!DOCTYPE html><html><head><title>Nuke Security Audit</title><style>@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap'); :root { --bg: #09090b; --panel: rgba(24, 24, 27, 0.6); --border: rgba(255, 255, 255, 0.1); --primary: #38bdf8; --danger: #ef4444; --text: #f8fafc; --muted: #94a3b8; } body { font-family: 'Outfit', sans-serif; background: radial-gradient(circle at top right, #1e1b4b, #09090b 50%); background-attachment: fixed; color: var(--text); margin: 0; padding: 3rem; min-height: 100vh; } .nav { display: flex; gap: 1.5rem; margin-bottom: 3rem; padding: 1rem 2rem; background: var(--panel); backdrop-filter: blur(12px); border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.3); } .nav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 1.1rem; transition: all 0.3s ease; padding: 0.5rem 1rem; border-radius: 8px; } .nav a:hover, .nav a.active { color: var(--text); background: rgba(255,255,255,0.05); transform: translateY(-2px); } h1 { font-size: 3rem; font-weight: 800; margin-bottom: 2rem; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: fade-in-up 0.6s ease-out; } h2 { font-size: 1.5rem; font-weight: 600; margin-top: 3rem; margin-bottom: 1.5rem; color: #e2e8f0; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; } .card { background: var(--panel); backdrop-filter: blur(10px); padding: 1.5rem; border-radius: 12px; margin-bottom: 1rem; border: 1px solid var(--border); border-left: 4px solid var(--danger); transition: transform 0.3s ease, box-shadow 0.3s ease; animation: fade-in-up 0.6s ease-out backwards; } .card:hover { transform: translateY(-4px); box-shadow: 0 12px 24px rgba(0,0,0,0.4); } .card pre { background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; overflow-x: auto; color: #fca5a5; } .empty-state { padding: 3rem; text-align: center; color: var(--muted); background: var(--panel); border-radius: 12px; border: 1px dashed var(--border); animation: fade-in 1s ease-out; font-size: 1.2rem; } table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel); border-radius: 12px; border: 1px solid var(--border); overflow: hidden; backdrop-filter: blur(10px); animation: fade-in-up 0.6s ease-out backwards; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); } th, td { padding: 1.2rem; text-align: left; border-bottom: 1px solid var(--border); } th { background: rgba(0,0,0,0.2); font-weight: 600; color: var(--muted); text-transform: uppercase; font-size: 0.85rem; letter-spacing: 0.05em; } tr:last-child td { border-bottom: none; } tr:hover td { background: rgba(255,255,255,0.03); } .tab-container { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 2rem; gap: 1rem; overflow-x: auto; } .tab-btn { background: none; border: none; color: var(--muted); font-size: 1.1rem; font-weight: 600; padding: 1rem; cursor: pointer; position: relative; font-family: inherit; white-space: nowrap; } .tab-btn:hover { color: var(--text); } .tab-btn.active { color: var(--primary); } .tab-btn.active::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 2px; background: var(--primary); } .tab-pane { display: none; animation: fade-in 0.3s ease-out; } .tab-pane.active { display: block; } @keyframes fade-in-up { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } } @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }</style></head><body>"
+                      ""
+                      "<h1><svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='vertical-align: text-bottom; margin-right: 1rem; color: #38bdf8;'><path d='M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z'/><path d='M12 14v7'/><path d='M7 12a5 5 0 0 1 10 0'/><path d='M18.3 6.3a14 14 0 0 0-12.6 0'/><path d='M13.7 11 18 3.5'/><path d='M10.3 11 6 3.5'/></svg>Security & Code Audit Report</h1>"
+                      "<div class='tab-container'>"
+                      "  <button class='tab-btn active' onclick=\"openTab(this, 'tab-vuln')\">Dependency Vulnerabilities (OSV.dev)</button>"
+                      "  <button class='tab-btn' onclick=\"openTab(this, 'tab-tasks')\">Dangerous Tasks (Using Shell Commands)</button>"
+                      "  <button class='tab-btn' onclick=\"openTab(this, 'tab-plugins')\">Unverified Remote Plugins</button>"
+                      "  <button class='tab-btn' onclick=\"openTab(this, 'tab-code')\">Static Code Findings</button>"
+                      "</div>"
+                      "<div id='tab-vuln' class='tab-pane active'>"
+                      (if (empty? @vuln-deps) "<div class='empty-state'>✨ Secure! No known vulnerabilities in your dependencies.</div>"
+                          (str/join "" (map (fn [v] (str "<div class='card'><details><summary style='color: #ef4444; font-size: 1.2rem; font-weight: 600; cursor: pointer; outline: none;'>⚠️ " (:coord v) "</summary><div style='margin-top: 1rem;'><div class='vuln-raw' style='display:none;'>" (:data v) "</div><div class='vuln-render'></div></div></details></div>")) @vuln-deps)))
+                      "</div>"
+                      "<div id='tab-tasks' class='tab-pane'>"
+                      (if (empty? @dangerous-tasks) "<div class='empty-state'>✨ Great job! No dangerous tasks found.</div>"
+                          (str/join "" (map (fn [t] (str "<div class='card'><h3>Task: " (:name t) "</h3><pre>" (or (:shell (:task t)) (:cmds (:task t))) "</pre></div>")) @dangerous-tasks)))
+                      "</div>"
+                      "<div id='tab-plugins' class='tab-pane'>"
+                      (if (empty? @dangerous-plugins) "<div class='empty-state'>✨ Secure! No remote plugins loaded over HTTP.</div>"
+                          (str/join "" (map (fn [p] (str "<div class='card'>" p "</div>")) @dangerous-plugins)))
+                      "</div>"
+                      "<div id='tab-code' class='tab-pane'>"
+                      (if (empty? @findings) "<div class='empty-state'>✨ Pristine code! No issues found.</div>"
+                          (str "<table><thead><tr><th>File</th><th>Line</th><th>Finding</th></tr></thead><tbody>"
+                               (str/join "" (map (fn [f] (str "<tr style='border-bottom:none;'><td style='color:#a78bfa; font-family:monospace; border-bottom:none;'><a href='file://" (sys-cwd) "/" (:file f) "#L" (:line f) "' style='color:#38bdf8; text-decoration:none;' target='_blank'>" (:file f) "</a></td><td style='color:#94a3b8; font-family:monospace; border-bottom:none;'>" (:line f) "</td><td style='color: #f59e0b; font-weight: 600; border-bottom:none;'>" (:msg f) "</td></tr><tr><td colspan='3' style='padding: 0 1.2rem 1.2rem 1.2rem;'><details><summary style='color: var(--muted); cursor: pointer; margin-bottom: 0.5rem;'>View Vulnerable Code</summary><pre style='margin: 0;'>" (:code f) "</pre></details></td></tr>")) @findings))
+                               "</tbody></table>"))
+                      "</div>"
+                      "</body><script>function openTab(btn, tabId) { document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active')); document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active')); document.getElementById(tabId).classList.add('active'); btn.classList.add('active'); } document.addEventListener('DOMContentLoaded', () => { document.querySelectorAll('.vuln-raw').forEach(el => { try { const data = JSON.parse(el.textContent); let html = ''; if (data.vulns) { data.vulns.forEach(v => { html += `<div style='margin-bottom: 1rem; padding: 1rem; background: rgba(239, 68, 68, 0.1); border-radius: 8px; border-left: 4px solid #ef4444;'><div style='font-weight: bold; color: #fca5a5; font-size: 1.1rem;'>${v.id}</div><div style='margin-top: 0.5rem; color: #e2e8f0;'>${v.summary || 'No summary provided.'}</div>${v.details ? `<div style='margin-top: 0.5rem; font-size: 0.9em; color: #94a3b8; white-space: pre-wrap; max-height: 200px; overflow-y: auto;'>${v.details}</div>` : ''}</div>`; }); } el.nextElementSibling.innerHTML = html; } catch (e) {} }); });</script></html>")]
+        (if (or (= format "file") (= format "html"))
+          (do
+            (io/write-file "target/security-report.html" html)
+            (println "  ✓ Security audit generated: target/security-report.html"))
+          (do
+            (println "\n=== Dangerous Tasks ===")
+            (if (empty? @dangerous-tasks)
+              (println "  None")
+              (loop [rem @dangerous-tasks]
+                (if (not (empty? rem))
+                  (let [t (first rem)]
+                    (println (str "  - " (:name t) " (Command: " (:cmd t) ")"))
+                    (recur (rest rem))))))
+            (println "\n=== Dangerous Plugins ===")
+            (println "  ✓ Security audit generated: target/security-report.html")))
+        {:dangerous-tasks @dangerous-tasks
+         :dangerous-plugins @dangerous-plugins
+         :findings @findings
+         :vulnerabilities @vuln-deps})))))
+
+(defn exec-audit-code [config format]
+  (println "\n\033[36m=== Code Audit ===\033[0m")
+  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
+        java-files (io/find-files src-dir ".java")
+        findings (atom [])]
+    (loop [fs java-files]
+      (if (not (empty? fs))
+        (let [f (first fs)
+              content (io/read-file f)
+              lines (str/split content "\n")]
+          (loop [idx 0]
+            (if (< idx (count lines))
+              (let [l (nth lines idx)
+                    code (str (if (> idx 0) (nth lines (- idx 1)) "") "\n" l "\n" (if (< (+ idx 1) (count lines)) (nth lines (+ idx 1)) ""))
+                    safe-code (str/replace (str/replace code "<" "&lt;") ">" "&gt;")]
+                (if (str/includes? l "System.exit")
+                  (swap! findings conj {:file f :line (+ idx 1) :msg "System.exit() used" :code safe-code}))
+                (if (str/includes? l "printStackTrace")
+                  (swap! findings conj {:file f :line (+ idx 1) :msg "printStackTrace() used (use logger)" :code safe-code}))
+                (if (and (str/includes? (str/lower-case l) "password") (str/includes? l "=") (str/includes? l "\""))
+                  (swap! findings conj {:file f :line (+ idx 1) :msg "Possible hardcoded password" :code safe-code}))
+                (recur (+ idx 1)))))
+          (recur (rest fs)))))
+    (io/mkdir-p "target")
+    (let [html (str "<!DOCTYPE html><html><head><title>Nuke Code Audit</title><style>@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap'); :root { --bg: #09090b; --panel: rgba(24, 24, 27, 0.6); --border: rgba(255, 255, 255, 0.1); --primary: #38bdf8; --warning: #f59e0b; --text: #f8fafc; --muted: #94a3b8; } body { font-family: 'Outfit', sans-serif; background: radial-gradient(circle at top right, #1e1b4b, #09090b 50%); background-attachment: fixed; color: var(--text); margin: 0; padding: 3rem; min-height: 100vh; } .nav { display: flex; gap: 1.5rem; margin-bottom: 3rem; padding: 1rem 2rem; background: var(--panel); backdrop-filter: blur(12px); border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.3); } .nav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 1.1rem; transition: all 0.3s ease; padding: 0.5rem 1rem; border-radius: 8px; } .nav a:hover, .nav a.active { color: var(--text); background: rgba(255,255,255,0.05); transform: translateY(-2px); } h1 { font-size: 3rem; font-weight: 800; margin-bottom: 2rem; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: fade-in-up 0.6s ease-out; } table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel); border-radius: 12px; border: 1px solid var(--border); overflow: hidden; backdrop-filter: blur(10px); animation: fade-in-up 0.6s ease-out backwards; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); } th, td { padding: 1.2rem; text-align: left; border-bottom: 1px solid var(--border); } th { background: rgba(0,0,0,0.2); font-weight: 600; color: var(--muted); text-transform: uppercase; font-size: 0.85rem; letter-spacing: 0.05em; } tr:last-child td { border-bottom: none; } tr:hover td { background: rgba(255,255,255,0.03); } .empty-state { padding: 3rem; text-align: center; color: var(--muted); background: var(--panel); border-radius: 12px; border: 1px dashed var(--border); animation: fade-in 1s ease-out; font-size: 1.2rem; } .finding { color: var(--warning); font-weight: 600; } @keyframes fade-in-up { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } } @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }</style></head><body>"
+                    ""
+                    "<h1><svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='vertical-align: text-bottom; margin-right: 1rem; color: #38bdf8;'><path d='M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z'/><path d='M12 14v7'/><path d='M7 12a5 5 0 0 1 10 0'/><path d='M18.3 6.3a14 14 0 0 0-12.6 0'/><path d='M13.7 11 18 3.5'/><path d='M10.3 11 6 3.5'/></svg>Code Audit Report</h1>"
+                    (if (empty? @findings) "<div class='empty-state'>✨ Pristine code! No issues found.</div>"
+                      (str "<table><thead><tr><th>File</th><th>Line</th><th>Finding</th></tr></thead><tbody>"
+                           (str/join "" (map (fn [f] (str "<tr style='border-bottom:none;'><td style='color:#a78bfa; font-family:monospace; border-bottom:none;'><a href='file://" (sys-cwd) "/" (:file f) "#L" (:line f) "' style='color:#38bdf8; text-decoration:none;' target='_blank'>" (:file f) "</a></td><td style='color:#94a3b8; font-family:monospace; border-bottom:none;'>" (:line f) "</td><td class='finding' style='border-bottom:none;'>" (:msg f) "</td></tr><tr><td colspan='3' style='padding: 0 1.2rem 1.2rem 1.2rem;'><details><summary style='color: var(--muted); cursor: pointer; margin-bottom: 0.5rem;'>View Vulnerable Code</summary><pre style='margin: 0;'>" (:code f) "</pre></details></td></tr>")) @findings))
+                           "</tbody></table>"))
+                    "</body></html>")]
+      (if (or (= format "html") (= format "file"))
+        (do
+          (io/write-file "target/code-audit-report.html" html)
+          (println "  ✓ Code audit generated: target/code-audit-report.html")))
+      {:findings @findings})))
+
+(defn exec-audit [args config]
+  (let [subcmd (loop [rem args res "all"]
+                 (if (empty? rem) res
+                   (if (or (str/starts-with? (first rem) "--") (= (first rem) "audit"))
+                     (recur (rest rem) res)
+                     (recur (rest rem) (first rem)))))
+        format (loop [rem args res "text"]
+                 (if (empty? rem) res
+                   (if (str/starts-with? (first rem) "--format=")
+                     (str/replace (first rem) "--format=" "")
+                     (if (= (first rem) "--format")
+                       (if (> (count rem) 1) (get rem 1) "text")
+                       (recur (rest rem) res)))))]
+    (cond
+      (= subcmd "project") (let [res (exec-audit-project config format)]
+                             (if (= format "json") (do (io/write-file "target/project-audit.json" (edn/edn->json res)) (println "  ✓ JSON report generated: target/project-audit.json")))
+                             (if (= format "edn") (do (io/write-file "target/project-audit.edn" (str res)) (println "  ✓ EDN report generated: target/project-audit.edn"))))
+      (= subcmd "dependencies") (let [res (exec-analyze-deps config format)]
+                                  (if (= format "json") (do (io/write-file "target/dependencies-audit.json" (edn/edn->json res)) (println "  ✓ JSON report generated: target/dependencies-audit.json")))
+                                  (if (= format "edn") (do (io/write-file "target/dependencies-audit.edn" (str res)) (println "  ✓ EDN report generated: target/dependencies-audit.edn"))))
+      (= subcmd "security") (let [res (exec-audit-security config format)]
+                              (if (= format "json") (do (io/write-file "target/security-audit.json" (edn/edn->json res)) (println "  ✓ JSON report generated: target/security-audit.json")))
+                              (if (= format "edn") (do (io/write-file "target/security-audit.edn" (str res)) (println "  ✓ EDN report generated: target/security-audit.edn"))))
+      (= subcmd "code") (let [res (exec-audit-code config format)]
+                          (if (= format "json") (do (io/write-file "target/code-audit.json" (edn/edn->json res)) (println "  ✓ JSON report generated: target/code-audit.json")))
+                          (if (= format "edn") (do (io/write-file "target/code-audit.edn" (str res)) (println "  ✓ EDN report generated: target/code-audit.edn"))))
+      (or (= subcmd "coverage") (= subcmd "metrics")) (run-task-graph "metrics" config {})
+      (= subcmd "all") (let [quiet? (or (= format "json") (= format "edn"))
+                             p (exec-audit-project config format)
+                             d (exec-analyze-deps config format)
+                             s (exec-audit-security config format)
+                             c (exec-audit-code config format)
+                             res {:project p :dependencies d :security s :code c}]
+                         (if (= format "json") (do (io/write-file "target/all-audit.json" (edn/edn->json res)) (println "  ✓ JSON report generated: target/all-audit.json")))
+                         (if (= format "edn") (do (io/write-file "target/all-audit.edn" (str res)) (println "  ✓ EDN report generated: target/all-audit.edn")))
+                         (if (not quiet?)
+                           (do
+                             (run-task-graph "metrics" config {})
+                             (if (or (= format "html") (= format "file"))
+                               (do
+                                 (io/write-file "target/index.html" "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><title>Nuke Audit Report</title><style>@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap'); :root { --bg: #09090b; --panel: rgba(24, 24, 27, 0.6); --border: rgba(255, 255, 255, 0.1); --primary: #38bdf8; --text: #f8fafc; --muted: #94a3b8; } body { font-family: 'Outfit', sans-serif; background: #09090b; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; } .nav { display: flex; gap: 1.5rem; padding: 1.5rem 3rem; background: var(--panel); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 10; } .nav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 1.1rem; transition: all 0.3s ease; padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; } .nav a:hover, .nav a.active { color: var(--text); background: rgba(255,255,255,0.05); } iframe { flex: 1; width: 100%; height: 100%; border: none; background: transparent; }</style><script>function loadPage(url, el) { document.getElementById('content-frame').src = url; document.querySelectorAll('.nav a').forEach(a => a.classList.remove('active')); el.classList.add('active'); }</script></head><body><div class='nav'><a onclick=\"loadPage('project-info-report.html', this)\" class='active'>Project Info</a> <a onclick=\"loadPage('deps-report.html', this)\">Dependencies</a> <a onclick=\"loadPage('security-report.html', this)\">Security & Audit</a> <a onclick=\"loadPage('test-report.html', this)\">Tests</a> <a onclick=\"loadPage('coverage-report.html', this)\">Coverage</a></div><iframe id='content-frame' src='project-info-report.html'></iframe></body></html>")
+                                 (println "  ✓ Generated target/index.html redirect to project-info-report.html"))))))
+      :else (println "Unknown audit subcommand. Use project, dependencies, security, code, coverage, or all."))))
+
 (defn exec-doctor []
   (println "\n\033[36m    _   __      __   [0m")
   (println "\033[36m   / | / /_  __/ /_  ___[0m")
@@ -1926,6 +2214,7 @@ window.onload = () => {
     ;; Fast-path commands that don't need nuke.edn
     (cond
       (or (= cmd "-v") (= cmd "-V") (= cmd "--version") (= cmd "version")) (do (show-version) (sys-exit 0))
+      (or (= cmd "-h") (= cmd "--help") (= cmd "help")) (do (println "Nuke Build Tool") (println "Run 'nuke tasks' to see available targets in this project.") (sys-exit 0))
       (= cmd "init") (do (exec-init args) (sys-exit 0))
       (= cmd "onefetch") (do (exec-onefetch args {}) (sys-exit 0))
       (= cmd "doctor") (do (exec-doctor) (sys-exit 0)))
@@ -1939,20 +2228,21 @@ window.onload = () => {
                        cov-opts (conj base-opts (io/quote-path (str "-javaagent:" agent-dest "=destfile=target/jacoco.exec")))
                        base-tasks (or (:tasks raw-config) {})
                        new-tasks (-> base-tasks
-                                   (assoc :prepare-metrics {:coni "(require \"libs/java/src/metrics.coni\" :as m) (m/download-jacoco @global-task-config)"})
+                                   (assoc :prepare-metrics {:native-fn metrics/download-jacoco})
                                    (assoc :test-cov {:extends "test" :deps [:compile :prepare-metrics] :test-jvm-opts cov-opts})
-                                   (assoc :metrics {:desc "Run the Java metrics toolkit" :deps [:test-cov] :coni "(require \"libs/java/src/metrics.coni\" :as m) (m/run-all-metrics @global-task-config)"})
-                                   (assoc :spotbugs {:desc "Run SpotBugs static analysis" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-spotbugs @global-task-config)"})
-                                   (assoc :pmd {:desc "Run PMD static analysis" :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-pmd @global-task-config)"})
-                                   (assoc :checkstyle {:desc "Run Checkstyle analysis" :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-analysis-checkstyle @global-task-config)"})
-                                   (assoc :sonarqube {:desc "Run SonarQube Scanner" :deps [:compile] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-sonarqube @global-task-config)"})
-                                   (assoc :analyze {:desc "Run all static analysis tools" :deps [:compile :metrics] :coni "(require \"libs/java/src/analysis.coni\" :as a) (a/run-all-analysis @global-task-config)"}))]
+                                   (assoc :metrics {:desc "Run the Java metrics toolkit" :deps [:test-cov] :native-fn metrics/run-all-metrics})
+                                   (assoc :spotbugs {:desc "Run SpotBugs static analysis" :deps [:compile] :native-fn analysis/run-analysis-spotbugs})
+                                   (assoc :pmd {:desc "Run PMD static analysis" :native-fn analysis/run-analysis-pmd})
+                                   (assoc :checkstyle {:desc "Run Checkstyle analysis" :native-fn analysis/run-analysis-checkstyle})
+                                   (assoc :sonarqube {:desc "Run SonarQube Scanner" :deps [:compile] :native-fn analysis/run-sonarqube})
+                                   (assoc :analyze {:desc "Run all static analysis tools" :deps [:compile :metrics] :native-fn analysis/run-all-analysis}))]
                    (assoc raw-config :tasks new-tasks))]
       (load-custom-tasks config)
       (cond
         (= cmd "tasks") (show-tasks)
         (= cmd "info")  (show-info config)
         (= cmd "watch") (nuke-watch (if (> (count args) 2) (get args 2) "compile") config)
+        (= cmd "audit") (exec-audit args config)
         :else (do
                 (if (= cmd "run")
                   (if (not (:main-class config))
