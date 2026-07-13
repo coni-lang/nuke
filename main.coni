@@ -1587,6 +1587,9 @@ window.onload = () => {
 (register-task "mirror" [] "Manage offline dependency mirrors (export, import, upload)" exec-mirror)
 (register-task "clean-git-deps" [] "Clear the global git dependency cache (~/.nuke/git-deps)" (fn [config] (git/clean-git-cache)))
 (register-task "dependencies" [] "Show recursively dependencies (local, maven, git)" exec-dependencies)
+(register-task "audit" [] "Run full security, code, and project audit (HTML)" (fn [config] (exec-audit ["all" "--format=html"] config)))
+(register-task "audit-json" [] "Run full audit and output JSON report" (fn [config] (exec-audit ["all" "--format=json"] config)))
+(register-task "audit-edn" [] "Run full audit and output EDN report" (fn [config] (exec-audit ["all" "--format=edn"] config)))
 
 (defn run-task-graph [task-name config completed]
   (let [args (sys-os-args)
