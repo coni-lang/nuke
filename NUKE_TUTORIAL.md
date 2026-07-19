@@ -179,6 +179,24 @@ Add private or mirror repositories:
 
 Nuke's incremental download cache means dependencies are only fetched once.
 
+### Transparent `pom.xml` Support
+
+Nuke can completely replace Maven without you having to write a `nuke.edn` file! If a `pom.xml` is present in the project directory but `nuke.edn` is missing, Nuke will transparently parse the POM. 
+
+It automatically translates:
+- Project Metadata (Name, Group, Version)
+- Source and Test paths
+- Dependencies and their scopes (including `test` and `provided`)
+- Custom properties (like `<exec.mainClass>`)
+
+You can run `nuke test`, `nuke build`, and `nuke uberjar` directly on a standard Maven project.
+
+If you want to permanently convert a Maven project to a Nuke project, run:
+```sh
+nuke info --persist
+```
+This writes the inferred configuration to a shiny new `nuke.edn`!
+
 ---
 
 ## 5. Local Dependencies & Multi-Module Projects

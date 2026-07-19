@@ -4,6 +4,7 @@ Nuke is a fast, lightweight, and extensible build tool for Java projects, config
 
 ## Features
 - **EDN Configuration**: Define your project metadata, dependencies, and custom tasks in a simple `nuke.edn` file.
+- **Maven `pom.xml` Support (New)**: Nuke natively and transparently builds standard Maven projects using their existing `pom.xml`—no `nuke.edn` required! You can also permanently convert a POM to EDN using `nuke info --persist`.
 - **Dependency Management**: Automatically downloads dependencies from Maven Central or resolves them from local Nuke projects.
 - **Built-in Tasks**: Standard build lifecycle out of the box (`clean`, `compile`, `test`, `run`, `jar`, `uberjar`, `zip`, `upload`, `build`, `dependencies`).
 - **Static Analysis & Metrics (New)**: First-class integration with JaCoCo (Coverage), SpotBugs, PMD, Checkstyle, Error Prone, and SonarQube. Automatically stitches results into a beautiful unified HTML dashboard!

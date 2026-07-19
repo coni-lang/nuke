@@ -277,7 +277,9 @@
 
 (defn exec-download-deps [config]
   (let [edn-path "nuke.edn"
-        edn-hash (if (io/exists? edn-path) (sys-md5 (io/read-file edn-path)) "no-edn")
+        pom-path "pom.xml"
+        edn-hash (if (io/exists? edn-path) (sys-md5 (io/read-file edn-path)) 
+                   (if (io/exists? pom-path) (sys-md5 (io/read-file pom-path)) "no-edn"))
         cache-dir ".nuke-tmp"
         cache-file (str cache-dir "/deps-cache.md5")
         prev-hash (if (io/exists? cache-file) (io/read-file cache-file) "none")]
@@ -287,7 +289,7 @@
         (let [repos (get-active-repos config)
               main-deps (let [raw (or (:dependencies config) [])] (jars/resolve-scoped-deps raw "all"))
               test-deps (if (:test-dependencies config) (:test-dependencies config) [])
-              deps (concat main-deps test-deps)]
+              deps (into [] (concat main-deps test-deps))]
           (if (> (count deps) 0)
             (do
               (log/step "Downloading dependencies to ~/.m2/repository...")
@@ -1480,7 +1482,7 @@ window.onload = () => {
                             (str "org.junit.jupiter:junit-jupiter-engine:" jupiter-v)
                             (str "org.junit.jupiter:junit-jupiter-params:" jupiter-v)
                             (str "com.google.errorprone:error_prone_core:" ep-v)]
-            all-deps (concat deps intrinsic-deps)]
+            all-deps (into [] (concat deps intrinsic-deps))]
         (let [resolved (maven/resolve-deps all-deps repos)]
           (loop [rem resolved]
             (if (not (empty? rem))
@@ -2222,8 +2224,18 @@ window.onload = () => {
       (= cmd "onefetch") (do (exec-onefetch args {}) (sys-exit 0))
       (= cmd "doctor") (do (exec-doctor) (sys-exit 0)))
     (let [config-file (if (io/exists? "nuke.edn") "nuke.edn" nil)
+          pom-file (if (and (not config-file) (io/exists? "pom.xml")) "pom.xml" nil)
           config-content (if config-file (io/read-file config-file) nil)
-          raw-config (if config-content (edn/parse-edn config-content) {})
+          raw-config (if config-content (edn/parse-edn config-content) 
+                       (if pom-file
+                         (let [pom-content (io/read-file pom-file)
+                               pom-cfg (maven/pom-to-nuke pom-content)]
+                           (if (some (fn [a] (or (= a "--persist") (= a "persist") (= a "-p"))) args)
+                             (do
+                               (log/info "Persisting converted pom.xml to nuke.edn")
+                               (io/write-file "nuke.edn" (str pom-cfg))))
+                           pom-cfg)
+                         {}))
           analysis-cfg (:analysis raw-config)
           config (let [jacoco-v (or (:version (:jacoco analysis-cfg)) "0.8.11")
                        agent-dest (maven/coord-to-m2-path "org.jacoco" "org.jacoco.agent" jacoco-v "runtime.jar")
