@@ -625,7 +625,15 @@
                          jaxb-files (if jaxb-cfg (io/find-files (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb") ".java") [])]
                      (concat base-files jaxb-files))]
     (if (empty? java-files)
-      (log/warn "No java files found. Skipping dependency analysis.")
+      (do
+        (log/warn "No java files found. Skipping dependency analysis.")
+        (if (or (= format "file") (= format "html"))
+          (io/write-file "target/deps-report.html"
+            (str "<!DOCTYPE html><html><head><title>Nuke Dependencies</title><style>@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap'); :root { --bg: #09090b; --panel: rgba(24, 24, 27, 0.6); --text: #f8fafc; --muted: #94a3b8; } body { font-family: 'Outfit', sans-serif; background: radial-gradient(circle at top right, #1e1b4b, #09090b 50%); color: var(--text); padding: 3rem; } .empty-state { padding: 3rem; text-align: center; color: var(--muted); background: var(--panel); border-radius: 12px; border: 1px dashed rgba(255,255,255,0.1); margin-top: 3rem; font-size: 1.2rem; }</style></head><body>"
+                 "<h1>📦 Dependency Analysis</h1>"
+                 "<div class='empty-state'>✨ No Java files found. Dependency analysis skipped.</div>"
+                 "</body></html>")))
+        {:status "skipped" :jars 0})
       (do
         (log/step "Resolving compile dependencies...")
         (let [cp-jars (get-classpath-jars config "." "compile")
@@ -1231,7 +1239,14 @@ window.onload = () => {
                             (log/warn "No *Test.java files found to run.")))))))
                 (log/warn "No test java files found.")))
             (log/success "Test source files and main classes unchanged. Skipping tests."))))
-      (log/warn "No test directory found."))))
+      (do
+        (io/mkdir-p "target")
+        (io/write-file "target/test-report.html"
+          (str "<!DOCTYPE html><html><head><title>Nuke Test Report</title><style>@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap'); :root { --bg: #09090b; --panel: rgba(24, 24, 27, 0.6); --text: #f8fafc; --muted: #94a3b8; } body { font-family: 'Outfit', sans-serif; background: radial-gradient(circle at top right, #1e1b4b, #09090b 50%); color: var(--text); padding: 3rem; } .empty-state { padding: 3rem; text-align: center; color: var(--muted); background: var(--panel); border-radius: 12px; border: 1px dashed rgba(255,255,255,0.1); margin-top: 3rem; font-size: 1.2rem; }</style></head><body>"
+               "<h1>🧪 Test Report</h1>"
+               "<div class='empty-state'>✨ No test directory found. Test execution skipped.</div>"
+               "</body></html>"))
+        (log/warn "No test directory found.")))))
 
 (defn exec-run [config]
   (let [main-class (:main-class config)]
@@ -1664,7 +1679,16 @@ window.onload = () => {
           (do
             (println (str "    - " (let [d (first rem)] (if (= (type d) "String") d (:coord d)))))
             (recur (rest rem)))))
-      (println "    None"))))
+      (println "    None")))
+  (let [subprojects (:local-dependencies config)]
+    (if (and subprojects (> (count subprojects) 0))
+      (do
+        (println "  Sub-Projects:")
+        (loop [rem subprojects]
+          (if (not (empty? rem))
+            (do
+              (println (str "    - " (first rem)))
+              (recur (rest rem)))))))))
 
 (defn show-version []
   (println (str "Nuke Build Tool v" nuke-version))
@@ -1949,7 +1973,13 @@ window.onload = () => {
                   "<div class='meta-row'><div class='meta-key'>Name:</div><div class='meta-val'>" (or (:name config) "Unknown") "</div></div>"
                   "<div class='meta-row'><div class='meta-key'>Version:</div><div class='meta-val'>" (or (:version config) "Unknown") "</div></div>"
                   "<div class='meta-row'><div class='meta-key'>Main-Class:</div><div class='meta-val'>" (or (:main-class config) "None") "</div></div>"
-                  "<div class='meta-row'><div class='meta-key'>Dependencies:</div></div>"
+                  (let [subprojects (or (:local-dependencies config) [])]
+                    (if (empty? subprojects) ""
+                      (str "<div class='meta-row' style='margin-top: 1rem;'><div class='meta-key'>Sub-Projects:</div></div>"
+                           "<ul style='list-style: none; padding-left: 1rem; margin-top: 0; font-family: ui-monospace, monospace; color: #38bdf8;'>"
+                           (str/join "" (map (fn [d] (str "<li style='margin-bottom: 0.25rem;'>- " d "</li>")) subprojects))
+                           "</ul>")))
+                  "<div class='meta-row' style='margin-top: 1rem;'><div class='meta-key'>Dependencies:</div></div>"
                   deps-html
                   "</div>"
                   "</body></html>")]
@@ -2113,11 +2143,9 @@ window.onload = () => {
       {:findings @findings})))
 
 (defn exec-audit [args config]
-  (let [subcmd (loop [rem args res "all"]
-                 (if (empty? rem) res
-                   (if (or (str/starts-with? (first rem) "--") (= (first rem) "audit"))
-                     (recur (rest rem) res)
-                     (recur (rest rem) (first rem)))))
+  (let [args-rest (rest (rest args))
+        subcmd (if (empty? args-rest) "all"
+                 (if (str/starts-with? (first args-rest) "--") "all" (first args-rest)))
         format (loop [rem args res "text"]
                  (if (empty? rem) res
                    (if (str/starts-with? (first rem) "--format=")
