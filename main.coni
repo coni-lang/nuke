@@ -184,7 +184,8 @@
               (if lpath
                 (let [abs-path (io/join-path base-pwd lpath)
                       child-edn (str abs-path "/nuke.edn")
-                      child-cfg (if (io/exists? child-edn) (edn/parse-edn (io/read-file child-edn)) {})]
+                      child-pom (str abs-path "/pom.xml")
+                      child-cfg (if (io/exists? child-edn) (edn/parse-edn (io/read-file child-edn)) (if (io/exists? child-pom) (maven/pom-to-nuke (io/read-file child-pom)) {}))]
                   (println (str pad "- [local] " lpath))
                   (print-deps-tree child-cfg (+ depth 1) visited-git abs-path)))
               (recur (rest rem)))))))
@@ -220,7 +221,8 @@
                       (let [cache-dir (:path clone-result)
                             build-dir (if dep-path (str cache-dir "/" dep-path) cache-dir)
                             dep-edn (str build-dir "/nuke.edn")
-                            dep-cfg (if (io/exists? dep-edn) (edn/parse-edn (io/read-file dep-edn)) {})]
+                            dep-pom (str build-dir "/pom.xml")
+                            dep-cfg (if (io/exists? dep-edn) (edn/parse-edn (io/read-file dep-edn)) (if (io/exists? dep-pom) (maven/pom-to-nuke (io/read-file dep-pom)) {}))]
                         (print-deps-tree dep-cfg (+ depth 1) visited-git build-dir))))))
               (recur (rest rem)))))))))
 
@@ -255,7 +257,8 @@
               (if lpath
                 (let [sub-abs (str abs-path "/" lpath)
                       edn-file (str sub-abs "/nuke.edn")
-                      sub-cfg (if (io/exists? edn-file) (edn/parse-edn (io/read-file edn-file)) {})]
+                      pom-file (str sub-abs "/pom.xml")
+                      sub-cfg (if (io/exists? edn-file) (edn/parse-edn (io/read-file edn-file)) (if (io/exists? pom-file) (maven/pom-to-nuke (io/read-file pom-file)) {}))]
                   (clean-project sub-abs sub-cfg)))
               (recur (rest rem)))))))))
 
@@ -267,9 +270,12 @@
 ; Build a local dependency jar — reads nuke.edn and delegates to jars/build-dep-jar.
 (defn build-dep-jar [abs-path]
   (let [edn-file (str abs-path "/nuke.edn")
+        pom-file (str abs-path "/pom.xml")
         dep-cfg  (if (io/exists? edn-file)
                    (edn/parse-edn (io/read-file edn-file))
-                   {})]
+                   (if (io/exists? pom-file)
+                     (maven/pom-to-nuke (io/read-file pom-file))
+                     {}))]
     (jars/build-dep-jar abs-path dep-cfg)))
 
 
@@ -324,6 +330,7 @@
               (if lpath
                 (let [abs-path (str (io/get-pwd) "/" lpath)]
                   (log/info (str "Resolving local dependency at " lpath "..."))
+                  (jars/link-or-copy-jars "libs" (str abs-path "/libs"))
                   (build-dep-jar abs-path)
                   (log/info (str "Linking/Copying local dependency jar from " lpath "..."))
                   (jars/link-or-copy-jars (str abs-path "/target") "libs")
@@ -1123,6 +1130,27 @@ window.onload = () => {
            :repositories repos}))))))))))
 
 (defn exec-test [config]
+  (let [local-deps (:local-dependencies config)]
+    (if local-deps
+      (loop [rem local-deps]
+        (if (not (empty? rem))
+          (do
+            (let [ldep (first rem)
+                  lpath (if (string? ldep) ldep (:path ldep))]
+              (if lpath
+                (let [abs-path (str (io/get-pwd) "/" lpath)
+                      raw-nuke-bin (first (sys-os-args))
+                      nuke-bin (if (str/starts-with? raw-nuke-bin "/") raw-nuke-bin (str (io/get-pwd) "/" raw-nuke-bin))
+                      cmd (str "cd " (io/quote-path abs-path) " && " (io/quote-path nuke-bin) " test")]
+                  (log/info (str "Running tests in subproject: " lpath "..."))
+                  (let [res (shell/sh cmd)]
+                    (if (not= 0 (:code res))
+                      (do
+                        (println (:stdout res))
+                        (log/error (str "Tests failed in subproject " lpath))
+                        (sys-exit 1))
+                      (println (:stdout res)))))))
+            (recur (rest rem)))))))
   (let [test-dirs (as-dir-list (:test-dir config) (if (io/exists? "src/test/java") "src/test/java" "src/tests"))]
     (if (> (count (find-all-files test-dirs ".java")) 0)
       (do

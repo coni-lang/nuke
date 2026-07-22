@@ -1,8 +1,0 @@
-{:name "example-maven-app"
- :version "1.0-SNAPSHOT"
- :main-class "com.example.Main"
- :src-dir "src/main/java"
- :test-dir "src/test/java"
- :local-dependencies ["../core"]
- :dependencies ["com.google.code.gson:gson:2.10.1"]
- :test-dependencies ["junit:junit:4.13.2"]}
