@@ -626,10 +626,17 @@
           "Local")))))
 
 (defn exec-analyze-deps [config format]
-  (let [src-dirs (as-dir-list (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
-        java-files (let [base-files (reduce concat [] (map (fn [d] (io/find-files d ".java")) src-dirs))
+  (let [all-subs (get-all-subprojects "." config)
+        src-dirs (loop [rem all-subs acc (as-dir-list (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))]
+                   (if (empty? rem) acc
+                     (let [sub (first rem)
+                           sub-cfg (if (io/exists? (str sub "/nuke.edn")) (edn/parse-edn (io/read-file (str sub "/nuke.edn")))
+                                     (if (io/exists? (str sub "/pom.xml")) (maven/pom-to-nuke (io/read-file (str sub "/pom.xml"))) {}))
+                           sub-src (as-dir-list (:src-dir sub-cfg) (if (io/exists? (str sub "/src/main/java")) (str sub "/src/main/java") (str sub "/src/main")))]
+                       (recur (rest rem) (concat acc (map (fn [s] (str sub "/" s)) sub-src))))))
+        java-files (let [base-files (reduce concat [] (map (fn [d] (if (io/exists? d) (io/find-files d ".java") [])) src-dirs))
                          jaxb-cfg (:jaxb config)
-                         jaxb-files (if jaxb-cfg (io/find-files (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb") ".java") [])]
+                         jaxb-files (if jaxb-cfg (if (io/exists? (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb")) (io/find-files (or (:out-dir jaxb-cfg) "target/generated-sources/jaxb") ".java") []) [])]
                      (concat base-files jaxb-files))]
     (if (empty? java-files)
       (do
@@ -643,7 +650,19 @@
         {:status "skipped" :jars 0})
       (do
         (log/step "Resolving compile dependencies...")
-        (let [cp-jars (get-classpath-jars config "." "compile")
+        (let [raw-cp-jars (loop [rem all-subs acc (get-classpath-jars config "." "compile")]
+                            (if (empty? rem) acc
+                              (let [sub (first rem)
+                                    sub-cfg (if (io/exists? (str sub "/nuke.edn")) (edn/parse-edn (io/read-file (str sub "/nuke.edn")))
+                                              (if (io/exists? (str sub "/pom.xml")) (maven/pom-to-nuke (io/read-file (str sub "/pom.xml"))) {}))
+                                    sub-jars (get-classpath-jars sub-cfg sub "compile")]
+                                (recur (rest rem) (concat acc sub-jars)))))
+              cp-jars (loop [rem raw-cp-jars uniq [] seen {}]
+                        (if (empty? rem) uniq
+                          (let [r (first rem)]
+                            (if (or (nil? r) (contains? seen r))
+                              (recur (rest rem) uniq seen)
+                              (recur (rest rem) (conj uniq r) (assoc seen r true))))))
               src-hash (if (> (count java-files) 0) (hash-all-directories src-dirs ".java") "empty")
               cp-hash (sys-md5 (str/join "," cp-jars))
               deps-hash (sys-md5 (str src-hash cp-hash))
@@ -694,12 +713,12 @@
                     (let [existing (get @jar-to-classes mod-name [])]
                       (swap! jar-to-classes assoc mod-name (conj existing class-path)))))
                 (recur (rest rem)))))
-          (let [all-jars (into #{} (str/split cp-jars io/classpath-separator))
+          (let [all-jars (into #{} cp-jars)
                 used-jars (into #{} (keys @jar-to-classes))
-                unused-jars (filter (fn [j] (and (str/ends-with? j ".jar")
+                unused-jars (vec (filter (fn [j] (and (str/ends-with? j ".jar")
                                                  (not (contains? used-jars j))))
-                                    all-jars)
-                used-jars-list (keys @jar-to-classes)]
+                                    cp-jars))
+                used-jars-list (vec (keys @jar-to-classes))]
             (if (= report-type "cli")
               (do
                 (println "\n\033[36m=== Dependency Analysis Report ===\033[0m")
@@ -1987,6 +2006,23 @@ window.onload = () => {
           (do (println (get matrix-lines w)) (recur (+ w 1)))))
       (println ""))))
 
+(defn get-all-subprojects [base-path config]
+  (let [direct (or (:local-dependencies config) [])
+        all (atom [])]
+    (loop [rem direct]
+      (if (not (empty? rem))
+        (let [sub (first rem)
+              sub-abs (if (= base-path ".") sub (str base-path "/" sub))]
+          (swap! all conj sub-abs)
+          (let [sub-cfg (if (io/exists? (str sub-abs "/nuke.edn")) (edn/parse-edn (io/read-file (str sub-abs "/nuke.edn")))
+                          (if (io/exists? (str sub-abs "/pom.xml")) (maven/pom-to-nuke (io/read-file (str sub-abs "/pom.xml"))) {}))
+                sub-deps (get-all-subprojects sub-abs sub-cfg)]
+            (loop [sd sub-deps]
+              (if (not (empty? sd))
+                (do (swap! all conj (first sd))
+                    (recur (rest sd)))))
+            (recur (rest rem))))))
+    @all))
 (defn exec-audit-project [config format]
   (println "\n\033[36m=== Project Info Audit ===\033[0m")
   (let [deps (or (:dependencies config) [])
@@ -2039,8 +2075,13 @@ window.onload = () => {
           (if (and (string? p) (str/starts-with? p "http"))
             (swap! dangerous-plugins conj p))
           (recur (rest ps)))))
-    (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
-          java-files (io/find-files src-dir ".java")
+    (let [all-subs (get-all-subprojects "." config)
+          src-dirs (loop [rem all-subs acc [(or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))]]
+                     (if (empty? rem) acc
+                       (let [sub (first rem)
+                             sub-src (if (io/exists? (str sub "/src/main/java")) (str sub "/src/main/java") (str sub "/src/main"))]
+                         (recur (rest rem) (conj acc sub-src)))))
+          java-files (reduce concat [] (map (fn [d] (if (io/exists? d) (io/find-files d ".java") [])) src-dirs))
           findings (atom [])]
       (loop [fs java-files]
         (if (not (empty? fs))
@@ -2060,7 +2101,21 @@ window.onload = () => {
                     (swap! findings conj {:file f :line (+ idx 1) :msg "Possible hardcoded password" :code safe-code}))
                   (recur (+ idx 1)))))
             (recur (rest fs)))))
-      (let [proj-deps (or (:dependencies config) [])
+      (let [all-subs (get-all-subprojects "." config)
+            raw-deps (loop [rem all-subs acc (or (:dependencies config) [])]
+                        (if (empty? rem) acc
+                          (let [sub (first rem)
+                                sub-cfg (if (io/exists? (str sub "/nuke.edn")) (edn/parse-edn (io/read-file (str sub "/nuke.edn")))
+                                          (if (io/exists? (str sub "/pom.xml")) (maven/pom-to-nuke (io/read-file (str sub "/pom.xml"))) {}))
+                                sub-deps (or (:dependencies sub-cfg) [])]
+                            (recur (rest rem) (concat acc sub-deps)))))
+            proj-deps (loop [rem raw-deps uniq [] seen {}]
+                        (if (empty? rem) uniq
+                          (let [d (first rem)
+                                coord (if (map? d) (:coord d) (str d))]
+                            (if (contains? seen coord)
+                              (recur (rest rem) uniq seen)
+                              (recur (rest rem) (conj uniq d) (assoc seen coord true))))))
             vuln-deps (atom [])]
       (println (str "Querying OSV.dev for vulnerabilities (" (count proj-deps) " dependencies)..."))
       (loop [ds proj-deps]
@@ -2134,8 +2189,13 @@ window.onload = () => {
 
 (defn exec-audit-code [config format]
   (println "\n\033[36m=== Code Audit ===\033[0m")
-  (let [src-dir (or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))
-        java-files (io/find-files src-dir ".java")
+  (let [all-subs (get-all-subprojects "." config)
+        src-dirs (loop [rem all-subs acc [(or (:src-dir config) (if (io/exists? "src/main/java") "src/main/java" "src/main"))]]
+                   (if (empty? rem) acc
+                     (let [sub (first rem)
+                           sub-src (if (io/exists? (str sub "/src/main/java")) (str sub "/src/main/java") (str sub "/src/main"))]
+                       (recur (rest rem) (conj acc sub-src)))))
+        java-files (reduce concat [] (map (fn [d] (if (io/exists? d) (io/find-files d ".java") [])) src-dirs))
         findings (atom [])]
     (loop [fs java-files]
       (if (not (empty? fs))
