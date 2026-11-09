@@ -1,0 +1,31 @@
+name: Build and Test Nuke
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Nuke
+        uses: actions/checkout@v4
+
+      - name: Download Coni Compiler
+        run: |
+          curl -fsSL -o coni https://gitea.hellonico.info/api/packages/coni-lang/generic/coni/latest/coni-linux-x64
+          chmod +x coni
+          mkdir -p bin
+          mv coni bin/coni
+          echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
+
+      - name: Run Nuke Tests
+        run: |
+          coni test tests/
+
+      - name: Build and Smoke-Test Nuke
+        run: |
+          CONI_COMPILER=coni CONI_HOME=/opt/coni-lang bash ./build_nuke.sh
+          ./nuke version

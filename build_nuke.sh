@@ -12,15 +12,21 @@ sed -i.bak "s~(def nuke-build-time .*~(def nuke-build-time \"$DATE\")~g" .build/
 sed -i.bak "s~(def nuke-commit-msg .*~(def nuke-commit-msg \"$MSG\")~g" .build/main.coni
 rm -f .build/main.coni.bak
 
-if [ -z "$CONI_HOME" ] || [ ! -f "$CONI_HOME/core.coni" ]; then
-    echo "[DEBUG] CONI_HOME is not set or missing core.coni. Searching..."
-    FOUND_CORE=$(find /home/runner -name "core.coni" 2>/dev/null | head -n 1 || true)
-    if [ -n "$FOUND_CORE" ]; then
-        export CONI_HOME=$(dirname "$FOUND_CORE")
-        echo "[DEBUG] Found core.coni at $FOUND_CORE. Set CONI_HOME=$CONI_HOME"
+if [ -z "$CONI_HOME" ] || [ ! -f "$CONI_HOME/main.go" ]; then
+    echo "[DEBUG] CONI_HOME is not set or missing main.go. Searching..."
+    if [ -f "/opt/coni-lang/main.go" ]; then
+        export CONI_HOME=/opt/coni-lang
+    elif [ -f "/Users/nico/coni/coni-lang/main.go" ]; then
+        export CONI_HOME=/Users/nico/coni/coni-lang
     else
-        export CONI_HOME=/Users/nico/cool/coni-lang
-        echo "[DEBUG] Could not find core.coni. Defaulting to $CONI_HOME"
+        FOUND_CORE=$(find /home/runner /workspace -name "core.coni" 2>/dev/null | head -n 1 || true)
+        if [ -n "$FOUND_CORE" ]; then
+            export CONI_HOME=$(dirname "$FOUND_CORE")
+            echo "[DEBUG] Found core.coni at $FOUND_CORE. Set CONI_HOME=$CONI_HOME"
+        else
+            export CONI_HOME=/Users/nico/cool/coni-lang
+            echo "[DEBUG] Could not find core.coni. Defaulting to $CONI_HOME"
+        fi
     fi
 else
     export CONI_HOME
@@ -39,11 +45,11 @@ fi
 
 if [ "$BUILD_ALL" = "1" ]; then
     mkdir -p .build/mac .build/linux .build/windows
-    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $COMPILER compile-native .build/main.coni -o .build/mac
+    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $COMPILER compile-native .build/main.coni -o .build/mac/main
     mv .build/mac/main nuke-mac
-    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/linux
+    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/linux/main
     mv .build/linux/main nuke-linux
-    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/windows
+    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $COMPILER compile-native .build/main.coni -o .build/windows/main.exe
     mv .build/windows/main.exe nuke.exe 2>/dev/null || mv .build/windows/main nuke.exe
     if [ "$(uname)" = "Linux" ]; then
         cp nuke-linux nuke
@@ -54,7 +60,7 @@ if [ "$BUILD_ALL" = "1" ]; then
     fi
 else
     mkdir -p .build/dev
-    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 $COMPILER compile-native .build/main.coni -o .build/dev
+    PATH="$PATH:/usr/local/go/bin:/opt/homebrew/bin" CGO_ENABLED=0 $COMPILER compile-native .build/main.coni -o .build/dev/main
     mv .build/dev/main nuke
 fi
 
