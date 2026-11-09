@@ -9,6 +9,7 @@
 (require "libs/java/src/git.coni" :as git)
 (require "libs/java/src/metrics.coni" :as metrics)
 (require "libs/java/src/analysis.coni" :as analysis)
+(require "libs/curl/src/curl.coni" :as curl)
 
 (def nuke-version "1.3.0")
 (def nuke-build-time "DEV")
@@ -2128,14 +2129,12 @@ window.onload = () => {
                     artifact (nth parts 1)
                     version (nth parts 2)
                     req (str "{\"package\":{\"name\":\"" group ":" artifact "\",\"ecosystem\":\"Maven\"},\"version\":\"" version "\"}")
-                    _ (io/mkdir-p ".nuke-tmp")
-                    _ (io/write-file ".nuke-tmp/osv-req.json" req)
                     _ (println (str "  -> Checking " group ":" artifact ":" version "..."))
-                    res (shell/sh "curl -s -X POST -H \"Content-Type: application/json\" -d @.nuke-tmp/osv-req.json https://api.osv.dev/v1/query")]
-                (if (and (= (:code res) 0) (not= (str/trim (:stdout res)) "{}"))
+                    res (curl/post "https://api.osv.dev/v1/query" {:headers {"Content-Type" "application/json"} :body req})]
+                (if (and (:ok? res) (not= (str/trim (:body res)) "{}") (not= (str/trim (:body res)) ""))
                   (do
                     (println (str "    \033[31m[!] Vulnerabilities found in " coord "!\033[0m"))
-                    (swap! vuln-deps conj {:coord coord :data (:stdout res)}))
+                    (swap! vuln-deps conj {:coord coord :data (:body res)}))
                   (println (str "    \033[32m[OK]\033[0m No vulnerabilities found."))))
               (println (str "    [WARN] Invalid dependency coord format: " coord)))
             (recur (rest ds)))))
